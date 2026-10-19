@@ -79,6 +79,11 @@ def map_gam_exception(exception: Exception) -> AdCPSalesAgentError:
     def matches(*needles: str) -> bool:
         return any(n in name for n in needles) or any(n in message for n in needles)
 
+    # A local file the seller's host could not read or write (the googleads cache
+    # under ~, a key file). The builtin PermissionError would otherwise match the
+    # permission row below by name and reach the buyer as PERMISSION_DENIED.
+    if isinstance(exception, OSError) and exception.filename is not None:
+        return AdCPConfigurationError(internal_detail=exception)
     # Order matters: the first match wins, and "invalid" appears inside many
     # unrelated fault strings, so the specific families are tested ahead of it.
     if matches(
