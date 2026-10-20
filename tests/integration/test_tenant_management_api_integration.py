@@ -397,7 +397,7 @@ class TestSyncApiAuth:
 
         with sync_app.test_client() as client:
             resp = client.get(
-                "/api/v1/sync/stats",
+                "/api/sync/stats",
                 headers={"X-API-Key": "sync-test-key"},
             )
             # Auth passed — we get past the decorator. Route may fail on DB
@@ -411,7 +411,7 @@ class TestSyncApiAuth:
         monkeypatch.setenv("SYNC_API_KEY", "sync-test-key")
 
         with sync_app.test_client() as client:
-            resp = client.post("/api/v1/sync/trigger/test-tenant")
+            resp = client.post("/api/sync/trigger/test-tenant")
             assert resp.status_code == 401
 
     def test_wrong_key_returns_401(self, sync_app, monkeypatch):
@@ -420,7 +420,7 @@ class TestSyncApiAuth:
 
         with sync_app.test_client() as client:
             resp = client.post(
-                "/api/v1/sync/trigger/test-tenant",
+                "/api/sync/trigger/test-tenant",
                 headers={"X-API-Key": "wrong-key"},
             )
             assert resp.status_code == 401
@@ -429,7 +429,7 @@ class TestSyncApiAuth:
         """When no key is configured anywhere, returns 503."""
         with sync_app.test_client() as client:
             resp = client.post(
-                "/api/v1/sync/trigger/test-tenant",
+                "/api/sync/trigger/test-tenant",
                 headers={"X-API-Key": "any-key"},
             )
             assert resp.status_code == 503

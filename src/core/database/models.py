@@ -492,6 +492,15 @@ class PricingOption(Base):
         Index("idx_pricing_options_product", "tenant_id", "product_id"),
     )
 
+    @staticmethod
+    def delivery_type_for(is_fixed: bool) -> str:
+        """The product delivery type a pricing option implies: fixed rate is guaranteed.
+
+        A default: a product may be guaranteed with auction pricing or the reverse, and its
+        stored ``delivery_type`` is what order time books from.
+        """
+        return "guaranteed" if is_fixed else "non_guaranteed"
+
 
 class CurrencyLimit(Base):
     """Currency-specific budget limits per tenant.
