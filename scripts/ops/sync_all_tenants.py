@@ -11,9 +11,9 @@ import sys
 import requests
 
 # Add parent directory to path to import modules
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from src.admin.sync_api import initialize_superadmin_api_key
+from src.admin.sync_api import initialize_tenant_management_api_key
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def sync_all_gam_tenants():
     """Sync all tenants that have Google Ad Manager configured."""
     # Get API key
-    api_key = initialize_superadmin_api_key()
+    api_key = initialize_tenant_management_api_key()
 
     # Get all GAM tenants from database using ORM
     with get_db_session() as session:
@@ -56,7 +56,7 @@ def sync_all_gam_tenants():
         try:
             # Call sync API
             response = requests.post(
-                f"http://localhost:{os.environ.get('ADCP_SALES_PORT', 8080)}/api/v1/sync/trigger/{tenant_id}",
+                f"http://localhost:{os.environ.get('ADCP_SALES_PORT', 8080)}/api/sync/trigger/{tenant_id}",
                 headers={"X-API-Key": api_key},
                 json={"sync_type": "full"},
                 timeout=300,  # 5 minute timeout per tenant

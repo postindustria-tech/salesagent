@@ -24,3 +24,37 @@ def test_every_crontab_target_exists_in_the_image() -> None:
     assert targets, f"no crontab job names a file under {_APP_DIR}: {jobs}"
     missing = [t for t in targets if not (repo_root() / t.removeprefix(_APP_DIR)).is_file()]
     assert not missing, f"crontab runs files the image does not contain: {missing}"
+
+
+def test_scheduled_sync_posts_to_a_registered_sync_route() -> None:
+    """The cron script imports and posts to a route the admin app serves.
+
+    On v2.0.0 the script imported a renamed key helper (ImportError) and posted to
+    ``/api/v1/sync/...`` while the blueprint is registered at ``/api/sync``.
+    """
+    import importlib.util
+    from unittest.mock import MagicMock, patch
+    from urllib.parse import urlsplit
+
+    from src.admin.app import create_app
+
+    spec = importlib.util.spec_from_file_location("sync_all_tenants", repo_root() / "scripts/ops/sync_all_tenants.py")
+    assert spec and spec.loader
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    tenant = MagicMock(tenant_id="t1")
+    session = MagicMock()
+    session.query.return_value.join.return_value.filter.return_value.all.return_value = [(tenant, MagicMock())]
+    with (
+        patch.object(script, "initialize_tenant_management_api_key", return_value="sk_test"),
+        patch.object(script, "get_db_session") as db,
+        patch.object(script.requests, "post") as post,
+    ):
+        db.return_value.__enter__.return_value = session
+        script.sync_all_gam_tenants()
+
+    path = urlsplit(post.call_args.args[0]).path
+    endpoint, args = create_app().url_map.bind("localhost").match(path, method="POST")
+    assert endpoint == "sync_api.trigger_sync"
+    assert args == {"tenant_id": "t1"}
