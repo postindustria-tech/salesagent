@@ -33,6 +33,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
+    is_local_file_error,
 )
 
 # Configure logging
@@ -82,7 +83,7 @@ def map_gam_exception(exception: Exception) -> AdCPSalesAgentError:
     # A local file the seller's host could not read or write (the googleads cache
     # under ~, a key file). The builtin PermissionError would otherwise match the
     # permission row below by name and reach the buyer as PERMISSION_DENIED.
-    if isinstance(exception, OSError) and exception.filename is not None:
+    if is_local_file_error(exception):
         return AdCPConfigurationError(internal_detail=exception)
     # Order matters: the first match wins, and "invalid" appears inside many
     # unrelated fault strings, so the specific families are tested ahead of it.

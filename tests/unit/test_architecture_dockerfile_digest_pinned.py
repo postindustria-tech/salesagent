@@ -7,7 +7,7 @@ Per D34 + PR 5 of issue #1234. Four independent checks:
 - ``find_unpinned_dockerfile_from_lines`` — every external ``FROM`` must reference
   ``@sha256:…`` or a digest ``ARG`` substitution, not a tag-only image ref.
 - ``runtime_user_directives`` — runtime stage must not end as root.
-- ``useradd_lines_without_home`` — the runtime user must get a home directory.
+- ``useradd_commands_without_home`` — the runtime user must get a home directory.
 """
 
 from __future__ import annotations
@@ -21,18 +21,8 @@ from tests.unit._architecture_helpers import (
     format_failure,
     repo_root,
     runtime_user_directives,
+    useradd_commands_without_home,
 )
-
-
-def useradd_lines_without_home(lines: list[str]) -> list[str]:
-    """``useradd`` commands that create no home directory.
-
-    ``useradd -r`` creates none by default, but ``$HOME`` still points at
-    ``/home/<user>``. Libraries that cache under ``~`` (googleads/zeep) then
-    fail with ``[Errno 13] Permission denied: '/home/app'`` and GAM sync breaks.
-    """
-    return [line.strip() for line in lines if "useradd " in line and not ({"-m", "--create-home"} & set(line.split()))]
-
 
 _KNOWN_BAD_FROM = [
     "FROM ghcr.io/astral-sh/uv:0.11.15 AS uv",
@@ -92,7 +82,7 @@ def test_dockerfile_non_root_detector_catches_root_group_form() -> None:
 def test_dockerfile_runtime_user_has_home() -> None:
     """The runtime user is created with a home directory it owns."""
     lines = (repo_root() / "Dockerfile").read_text(encoding="utf-8").splitlines()
-    violations = useradd_lines_without_home(lines)
+    violations = useradd_commands_without_home(lines)
     assert not violations, format_failure(
         summary="Dockerfile creates a user without a home directory (useradd needs -m)",
         violations=violations,
@@ -100,6 +90,32 @@ def test_dockerfile_runtime_user_has_home() -> None:
 
 
 @pytest.mark.arch_guard
-def test_dockerfile_home_detector_catches_useradd_without_m() -> None:
-    assert useradd_lines_without_home(["RUN useradd -r -u 1001 -g app -s /usr/sbin/nologin app"])
-    assert not useradd_lines_without_home(["RUN useradd -r -m -d /home/app -u 1001 -g app app"])
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        "RUN useradd -r -u 1001 -g app -s /usr/sbin/nologin app",
+        "RUN groupadd -r app && useradd -r -u 1001 -g app app && mkdir -p /var/run",
+        "RUN groupadd -r app && \\\n    useradd -r -u 1001 \\\n    -g app app",
+        "RUN useradd -M -r app",
+    ],
+)
+def test_dockerfile_home_detector_catches_useradd_without_home(dockerfile: str) -> None:
+    """Mutation self-test: each spelling that creates no home must be flagged."""
+    assert useradd_commands_without_home(dockerfile.splitlines())
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        "RUN useradd -r -m -d /home/app -u 1001 -g app app",
+        "RUN useradd -rm -d /home/app app",
+        "RUN useradd -mr app",
+        "RUN useradd --create-home --system app",
+        "RUN useradd -r \\\n    -m -d /home/app app",
+        "# useradd -r alone makes no home\nRUN useradd -r -m app",
+    ],
+)
+def test_dockerfile_home_detector_accepts_useradd_with_home(dockerfile: str) -> None:
+    """Every spelling that creates a home passes, and a comment is not an instruction."""
+    assert not useradd_commands_without_home(dockerfile.splitlines())

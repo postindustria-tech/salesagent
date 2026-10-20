@@ -1687,6 +1687,16 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
+def is_local_file_error(exc: BaseException) -> bool:
+    """An OS error on a file of the seller's own host: a deployment fault, never the caller's.
+
+    The builtin ``PermissionError`` is one, and its name says "permission", so without this
+    check a cache write under a missing home directory reads as PERMISSION_DENIED. An
+    ``OSError`` that names a file is the host's; a socket error names none.
+    """
+    return isinstance(exc, OSError) and exc.filename is not None
+
+
 def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentError:
     """Normalize untyped exceptions to typed AdCPSalesAgentError subclasses.
 
@@ -1694,8 +1704,9 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
     boundaries (MCP, A2A, REST). Already-typed ``AdCPSalesAgentError`` passes through
     unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
     ``AdCPValidationError``; other ``ValueError`` instances map to the plain
-    validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
-    anything else names INTERNAL_ERROR on the base.
+    validation error, an ``OSError`` naming a local file to ``AdCPConfigurationError``,
+    any other ``PermissionError`` to ``AdCPAuthorizationError``, and anything else names
+    INTERNAL_ERROR on the base.
 
     Every branch keeps its type mapping and carries NO text: an untyped exception's
     string has no provenance guarantee (it may be a DB DSN, a stack fragment, or an
@@ -1740,6 +1751,8 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
         )
     if isinstance(exc, ValueError):
         return AdCPValidationError()
+    if is_local_file_error(exc):
+        return AdCPConfigurationError(internal_detail=exc)
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError()
     return AdCPInternalError()

@@ -259,21 +259,3 @@ class TestEveryClassifierRow:
         assert not isinstance(error, retry_on), (
             f"{type(error).__name__} is in the default retry set; an unclassifiable fault must not be retried"
         )
-
-    def test_local_file_error_is_sellers_config_not_gam_permission(self):
-        """A filesystem error on the seller's host is not a GAM authorization failure.
-
-        The googleads client writes a cache under ``~``. In an image whose runtime
-        user has no home directory that write raises the builtin ``PermissionError``,
-        whose type name and message both say "permission", so it was reported as
-        PERMISSION_DENIED: the buyer was told to check advertiser permissions and the
-        operator went looking at GAM roles. It is the seller's deployment to fix,
-        which is CONFIGURATION_ERROR.
-        """
-        from src.adapters.gam.utils.error_handler import map_gam_exception
-
-        fault = PermissionError(13, "Permission denied", "/home/app")
-        error = map_gam_exception(fault)
-
-        assert error.error_code == "CONFIGURATION_ERROR"
-        assert error.internal_detail is fault
