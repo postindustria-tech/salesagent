@@ -26,35 +26,42 @@ def test_every_crontab_target_exists_in_the_image() -> None:
     assert not missing, f"crontab runs files the image does not contain: {missing}"
 
 
-def test_scheduled_sync_posts_to_a_registered_sync_route() -> None:
-    """The cron script imports and posts to a route the admin app serves.
-
-    On v2.0.0 the script imported a renamed key helper (ImportError) and posted to
-    ``/api/v1/sync/...`` while the blueprint is registered at ``/api/sync``.
-    """
+def _load_sync_script():
     import importlib.util
-    from unittest.mock import MagicMock, patch
-    from urllib.parse import urlsplit
-
-    from src.admin.app import create_app
 
     spec = importlib.util.spec_from_file_location("sync_all_tenants", repo_root() / "scripts/ops/sync_all_tenants.py")
     assert spec and spec.loader
     script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(script)
+    return script
 
-    tenant = MagicMock(tenant_id="t1")
-    session = MagicMock()
-    session.query.return_value.join.return_value.filter.return_value.all.return_value = [(tenant, MagicMock())]
-    with (
-        patch.object(script, "initialize_tenant_management_api_key", return_value="sk_test"),
-        patch.object(script, "get_db_session") as db,
-        patch.object(script.requests, "post") as post,
-    ):
-        db.return_value.__enter__.return_value = session
-        script.sync_all_gam_tenants()
 
-    path = urlsplit(post.call_args.args[0]).path
-    endpoint, args = create_app().url_map.bind("localhost").match(path, method="POST")
-    assert endpoint == "sync_api.trigger_sync"
-    assert args == {"tenant_id": "t1"}
+def test_scheduled_sync_posts_to_the_trigger_route() -> None:
+    """The cron script's trigger path is the route the sync blueprint serves.
+
+    On v2.0.0 the script posted to ``/api/v1/sync/...`` while the app served ``/api/sync``:
+    the blueprint declared one prefix and ``create_app`` registered it under another. The
+    prefix now lives on the blueprint alone, so a bare app registering it resolves the path.
+    """
+    from flask import Flask
+
+    from src.admin.sync_api import sync_api
+
+    app = Flask(__name__)
+    app.register_blueprint(sync_api)
+    path = _load_sync_script().SYNC_TRIGGER_PATH.format(tenant_id="t1")
+
+    endpoint, args = app.url_map.bind("localhost").match(path, method="POST")
+
+    assert (endpoint, args) == ("sync_api.trigger_sync", {"tenant_id": "t1"})
+
+
+def test_scheduled_sync_sends_the_configured_key(monkeypatch) -> None:
+    """The sync API checks ``SYNC_API_KEY`` before the stored key, so the job must send it.
+
+    The job used to send the stored ``api_key`` row whatever was configured, so on a
+    deployment that sets ``SYNC_API_KEY`` every scheduled trigger answered 401.
+    """
+    monkeypatch.setenv("SYNC_API_KEY", "sk_from_env")
+
+    assert _load_sync_script().sync_api_key() == "sk_from_env"

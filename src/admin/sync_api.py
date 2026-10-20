@@ -24,16 +24,23 @@ from src.services.gam_inventory_service import db_session as gam_db_session
 
 logger = logging.getLogger(__name__)
 
+# The one place the sync API's prefix and key settings are named: create_app registers the
+# blueprint as declared, and the scheduled sync job (scripts/ops/sync_all_tenants.py) builds
+# its URL and looks up its key from these.
+SYNC_API_PREFIX = "/api/sync"
+SYNC_API_KEY_ENV = "SYNC_API_KEY"
+SYNC_API_KEY_CONFIG = "api_key"
+
 # Create Blueprint
-sync_api = Blueprint("sync_api", __name__, url_prefix="/api/v1/sync")
+sync_api = Blueprint("sync_api", __name__, url_prefix=SYNC_API_PREFIX)
 
 # Get database session
 db_session = gam_db_session
 
 
 require_sync_api_key = require_api_key_auth(
-    env_var="SYNC_API_KEY",
-    config_key="api_key",
+    env_var=SYNC_API_KEY_ENV,
+    config_key=SYNC_API_KEY_CONFIG,
     header="X-API-Key",
 )
 

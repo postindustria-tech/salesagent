@@ -372,7 +372,7 @@ def create_app(config=None):
     try:
         from src.admin.sync_api import sync_api
 
-        app.register_blueprint(sync_api, url_prefix="/api/sync")
+        app.register_blueprint(sync_api)
     except ImportError:
         logger.warning("sync_api blueprint not found")
 
