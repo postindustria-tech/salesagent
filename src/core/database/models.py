@@ -679,6 +679,15 @@ class PricingOption(Base):
         suffix = "fixed" if (is_fixed or model == "cpa") else "auction"
         return f"{model}_{currency.lower()}_{suffix}"
 
+    @staticmethod
+    def delivery_type_for(is_fixed: bool) -> str:
+        """The product delivery type a pricing option implies: fixed rate is guaranteed.
+
+        A default, as above: a product may be guaranteed with auction pricing or the
+        reverse, and its stored ``delivery_type`` is what order time books from.
+        """
+        return "guaranteed" if is_fixed else "non_guaranteed"
+
     @classmethod
     def create(
         cls,

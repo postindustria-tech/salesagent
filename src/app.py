@@ -281,7 +281,11 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
-    """A raw ``PermissionError`` is PERMISSION_DENIED, the 403 every transport emits for it."""
+    """A raw ``PermissionError`` is typed by ``adcp_error_for`` like on every other transport.
+
+    PERMISSION_DENIED, the 403, unless it names a local file: that is the host's own
+    deployment fault and answers CONFIGURATION_ERROR.
+    """
     return _envelope_response(request, exc)
 
 
