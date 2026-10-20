@@ -22,35 +22,12 @@ class GAMProductConfigService:
             Dictionary of GAM implementation config with sensible defaults
         """
         # Base configuration shared across all types
-        base_config = {
+        base_config: dict[str, Any] = {
             "cost_type": "CPM",
-            "creative_rotation_type": "EVEN",
             "primary_goal_unit_type": "IMPRESSIONS",
             "include_descendants": True,
         }
-
-        # Delivery-type-specific defaults
-        if delivery_type == "guaranteed":
-            base_config.update(
-                {
-                    "line_item_type": "STANDARD",
-                    "priority": 6,
-                    "primary_goal_type": "DAILY",
-                    "delivery_rate_type": "EVENLY",
-                    "non_guaranteed_automation": "manual",  # Guaranteed always manual
-                }
-            )
-        else:  # non_guaranteed
-            base_config.update(
-                {
-                    "line_item_type": "PRICE_PRIORITY",
-                    "priority": 10,
-                    "primary_goal_type": "NONE",
-                    "delivery_rate_type": "AS_FAST_AS_POSSIBLE",
-                    "creative_rotation_type": "OPTIMIZED",
-                    "non_guaranteed_automation": "confirmation_required",  # Safe default
-                }
-            )
+        base_config.update(GAMProductConfigService.delivery_defaults(delivery_type))
 
         # Generate creative placeholders from formats if provided
         if formats:
@@ -62,6 +39,34 @@ class GAMProductConfigService:
             ]
 
         return base_config
+
+    @staticmethod
+    def delivery_defaults(delivery_type: str) -> dict[str, Any]:
+        """The implementation_config settings that follow from the delivery type alone.
+
+        Every key here is re-derived when an edit moves a product between guaranteed and
+        non-guaranteed; the rest of the config (targeting, placeholders) is the seller's.
+
+        Args:
+            delivery_type: "guaranteed" or "non_guaranteed"
+        """
+        if delivery_type == "guaranteed":
+            return {
+                "line_item_type": "STANDARD",
+                "priority": 6,
+                "primary_goal_type": "DAILY",
+                "delivery_rate_type": "EVENLY",
+                "creative_rotation_type": "EVEN",
+                "non_guaranteed_automation": "manual",  # Guaranteed always manual
+            }
+        return {
+            "line_item_type": "PRICE_PRIORITY",
+            "priority": 10,
+            "primary_goal_type": "NONE",
+            "delivery_rate_type": "AS_FAST_AS_POSSIBLE",
+            "creative_rotation_type": "OPTIMIZED",
+            "non_guaranteed_automation": "confirmation_required",  # Safe default
+        }
 
     @staticmethod
     def _generate_creative_placeholders(formats: list[str]) -> list[dict[str, Any]]:

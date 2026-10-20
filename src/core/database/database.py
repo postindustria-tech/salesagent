@@ -306,7 +306,7 @@ def init_db(exit_on_error=False):
                         targeting_template=p["targeting_template"],
                         implementation_config=p.get("implementation_config"),
                         property_tags=p.get("property_tags"),
-                        delivery_type="guaranteed" if is_fixed else "non_guaranteed",
+                        delivery_type=PricingOptionModel.delivery_type_for(is_fixed),
                     )
                     db_session.add(new_product)
                     db_session.flush()
