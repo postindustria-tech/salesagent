@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, ClassVar, Literal
 
-from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import CreativeStatus
 from adcp.types import ListCreativesRequest as LibraryListCreativesRequest
 from adcp.types import ListCreativesResponse as LibraryListCreativesResponse
@@ -43,12 +42,12 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
     AdcpResponse,
     BuyerRequest,
+    CreativeAssetRequest,
     Format,
     FormatId,
     NestedModelSerializerMixin,
@@ -114,146 +113,6 @@ class CreativeStatusEnum(Enum):
     approved = "approved"
     rejected = "rejected"
     pending_review = "pending_review"
-
-
-class CreativeAssetRequest(LibraryCreativeAsset):
-    """The item type sync_creatives ACCEPTS, per core/creative-asset.json.
-
-    Deliberately NOT ``Creative`` below, which extends the list_creatives RESPONSE model.
-    This field used to point there, so the request shape was a response shape. Once MCP and
-    REST both derived their accepted shape from this DTO, that became enforced on both, and
-    it cost real capability:
-
-      * seven SPEC-LEGAL request fields could not be sent -- inputs, format_kind,
-        format_option_ref, weight, placement_refs, placement_ids, industry_identifiers.
-        ``inputs`` is IMPLEMENTED (tools/creatives/_assets.py reads inputs[0].
-        context_description as the generative prompt fallback), so a shipped feature was
-        unreachable on two of three transports.
-      * ``assets`` is spec-REQUIRED and the response model made it optional, so a payload
-        omitting it cleared the boundary and failed late and differently per transport:
-        mid-pipeline VALIDATION_ERROR on mcp/rest, silently defaulted to {} on a2a.
-
-    The old docstring called the response model "richer". It is -- in RESPONSE fields, while
-    missing REQUEST ones, which is the whole defect in one word.
-
-    THE ONEOF, FLATTENED. core/creative-asset.json identifies a creative by ``format_id`` OR
-    by ``format_kind``. The SDK models that: datamodel-codegen renders two classes with
-    identical field sets, differing only in which identifier each requires (CreativeAsset1,
-    CreativeAsset2), wrapped in a RootModel union. Pydantic's union validation of that type
-    IS the oneOf, so re-implementing it would normally be the mistake.
-
-    One thing rules it out, and it is a wire-contract reason rather than a taste one. A
-    failing union branch carries its own class name in the pydantic ``loc``, so the buyer
-    receives the pointer ``/creatives/0/CreativeAsset1/name``. ``core/error.json`` requires
-    ``issues[].pointer`` to address the offending field IN THE REQUEST PAYLOAD, and
-    ``CreativeAsset1`` names nothing the buyer sent: it is a codegen artifact that appears
-    nowhere in AdCP. The SDK validates correctly and reports the failure unconformantly.
-    NOT yet reported upstream -- searched adcontextprotocol/adcp and found no issue for it.
-
-    Flattening onto one branch -- which already carries every field of both -- keeps the
-    validation and fixes the pointer. ``format_id`` relaxes to optional, the constraint
-    states itself as the ``oneOf`` keyword, and the pointer stays ``/creatives/0``. Extend
-    the union type instead on the day its locs address the payload.
-    """
-
-    # from_attributes: a subclass of an SDK type must accept INSTANCES of that SDK type.
-    # Without it pydantic's model_type check rejects the parent -- so adcp's own
-    # CreativeAsset could not be handed to a request model that extends it, and every
-    # caller holding a typed SDK object would have to know about our subclass and
-    # round-trip through a dict to get past it.
-    model_config = ConfigDict(extra=get_pydantic_extra_mode(), from_attributes=True)
-
-    # WEAKENED, deliberately: required -> optional. The parent is one branch of the oneOf,
-    # where format_id is the identifier. The other branch identifies by format_kind and omits
-    # format_id, so requiring it here announces half the schema.
-    # LibraryFormatId, not the local FormatId subclass: the ONLY axis this redeclaration
-    # changes is nullability. Narrowing to the subclass would repeat the defect above one
-    # level down -- the SDK's own FormatId would stop validating into its own field.
-    format_id: LibraryFormatId | None = None  # type: ignore[assignment]
-
-    @model_validator(mode="after")
-    def _exactly_one_format_identifier(self) -> "CreativeAssetRequest":
-        """core/creative-asset.json is a oneOf: format_id XOR format_kind.
-
-        Raised at the ITEM, which is where a oneOf failure belongs. core/error.json requires
-        each entry in ``issues[]`` to carry an RFC 6901 ``pointer`` to the offending field
-        and a ``keyword`` "drawn from the JSON Schema vocabulary" -- and for a oneOf, no
-        single field is at fault, so the pointer is the object (``/creatives/0``) and the
-        keyword is ``oneOf``. The schema even provides ``issues[].discriminator`` for naming
-        the variant.
-
-        So this deliberately does NOT attach a loc pointing at ``format_id``. That would
-        report a field the buyer never had to send, because the format_kind branch is
-        equally legal.
-
-        The error TYPE is the keyword. A plain ``ValueError`` becomes pydantic's
-        ``value_error``, which ``PYDANTIC_KEYWORD_MAP`` classifies as ``None`` -- "no honest
-        JSON Schema keyword" -- so the issue was dropped from ``issues[]`` and the buyer got
-        an envelope with no structured reason. This rejection CAN be substantiated as
-        ``oneOf``, so it says so (see ``SELLER_RAISED_KEYWORDS``).
-        """
-        supplied = sum(identifier is not None for identifier in (self.format_id, self.format_kind))
-        if supplied != 1:
-            raise PydanticCustomError("oneOf", "provide exactly one of format_id or format_kind")
-        return self
-
-    @model_validator(mode="after")
-    def _trackers_bind_tracking_events(self) -> "CreativeAssetRequest":
-        """The two tracker-asset rules the pin states beyond what the SDK renders.
-
-        core/assets/vast-tracker-asset.json and daast-tracker-asset.json bind ``vast_event`` /
-        ``daast_event`` with ``not: {enum: [impression, clickTracking, ...]}`` -- an Impression
-        URL "MUST be modeled as a url asset with url_type tracker_pixel", the others belong to
-        VideoClicks, Error and ViewableImpression -- and require ``offset`` when the event is
-        ``progress`` (an ``allOf if/then``). datamodel-codegen renders the event as the whole
-        tracking-event enum and cannot express either, so the accepted shape states them here,
-        as the schema violations they are (INVALID_REQUEST). ``target`` needs nothing: the SDK
-        types it as the pin's two-member enum.
-
-        Raised as pydantic errors, like the oneOf above, so the boundary's one mapping
-        turns them into the INVALID_REQUEST envelope with ``issues[]``: the refused event is
-        an ``enum`` claim (the value is outside the set this field accepts), the missing
-        offset a ``required`` one (pydantic's ``missing``).
-        """
-        for slot, value in (self.assets or {}).items():
-            for asset in value if isinstance(value, list) else [value]:
-                inner = getattr(asset, "root", asset)
-                asset_type = getattr(inner, "asset_type", None)
-                if asset_type not in ("vast_tracker", "daast_tracker"):
-                    continue
-                event_field = "vast_event" if asset_type == "vast_tracker" else "daast_event"
-                event = getattr(inner, event_field, None)
-                event = getattr(event, "value", event)
-                if event in _NON_TRACKING_EVENTS:
-                    raise PydanticCustomError(
-                        "enum",
-                        "assets.{slot}.{field}: {event} is not a TrackingEvents event",
-                        {"slot": slot, "field": event_field, "event": event, "expected": "a TrackingEvents event"},
-                    )
-                if event == "progress" and getattr(inner, "offset", None) is None:
-                    raise PydanticCustomError(
-                        "missing",
-                        "assets.{slot}.offset is required when {field} is progress",
-                        {"slot": slot, "field": event_field},
-                    )
-        return self
-
-
-#: Events the pinned tracker assets refuse (vast-tracker-asset.json / daast-tracker-asset.json
-#: ``not: {enum: [...]}``): each belongs to another VAST/DAAST element, not TrackingEvents.
-_NON_TRACKING_EVENTS: frozenset[str] = frozenset(
-    {
-        "impression",
-        "clickTracking",
-        "customClick",
-        "error",
-        "viewable",
-        "notViewable",
-        "viewUndetermined",
-        "measurableImpression",
-        "viewableImpression",
-    }
-)
 
 
 # --- Creative Lifecycle ---

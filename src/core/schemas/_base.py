@@ -23,8 +23,6 @@ from src.core.enum_helpers import enum_value
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
 
-    from src.core.schemas.creative import CreativeAssetRequest
-
 from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference as LibraryBrandReference
@@ -43,6 +41,7 @@ from adcp.types import (
     ProtocolEnvelope,
 )
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
 from adcp.types import GetAdcpCapabilitiesResponse as LibraryGetAdcpCapabilitiesResponse
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
@@ -2106,6 +2105,88 @@ class BrandAsset(SalesAgentBaseModel):
     duration: float | None = Field(None, ge=0, description="Duration in seconds (for video/audio)")
 
 
+#: Events the pinned tracker assets refuse (vast-tracker-asset.json / daast-tracker-asset.json
+#: ``not: {enum: [...]}``): each belongs to another VAST/DAAST element, not TrackingEvents.
+_NON_TRACKING_EVENTS: frozenset[str] = frozenset(
+    {
+        "impression",
+        "clickTracking",
+        "customClick",
+        "error",
+        "viewable",
+        "notViewable",
+        "viewUndetermined",
+        "measurableImpression",
+        "viewableImpression",
+    }
+)
+
+
+class CreativeAssetRequest(LibraryCreativeAsset):
+    """The item type sync_creatives and create_media_buy packages ACCEPT, per core/creative-asset.json.
+
+    Deliberately NOT ``Creative`` (creative.py), which extends the list_creatives RESPONSE
+    model: the request and response shapes differ, and pointing the request at the response
+    cost spec-legal request fields and the required ``assets``.
+
+    The canonical parent (adcp 9 ``adcp.types.CreativeAsset``) identifies the creative by
+    ``format_kind`` and refuses the deprecated named-format ``format_id`` outright. A 3.0/3.1
+    buyer's ``format_id`` is projected to the canonical identity at the request boundary,
+    before this model sees it (3.2 3-1-to-3-2.mdx, upgrade step 8: isolate legacy projection
+    at compatibility boundaries).
+
+    Defined here rather than in creative.py so ``PackageRequest.creatives`` can name it
+    directly: the canonical base force-rebuilds every subclass at class creation, and an
+    unresolved forward reference raises there.
+    """
+
+    # from_attributes: a subclass of an SDK type must accept INSTANCES of that SDK type.
+    # Without it pydantic's model_type check rejects the parent -- so adcp's own
+    # CreativeAsset could not be handed to a request model that extends it.
+    model_config = ConfigDict(extra=get_pydantic_extra_mode(), from_attributes=True)
+
+    @model_validator(mode="after")
+    def _trackers_bind_tracking_events(self) -> "CreativeAssetRequest":
+        """The two tracker-asset rules the pin states beyond what the SDK renders.
+
+        core/assets/vast-tracker-asset.json and daast-tracker-asset.json bind ``vast_event`` /
+        ``daast_event`` with ``not: {enum: [impression, clickTracking, ...]}`` -- an Impression
+        URL "MUST be modeled as a url asset with url_type tracker_pixel", the others belong to
+        VideoClicks, Error and ViewableImpression -- and require ``offset`` when the event is
+        ``progress`` (an ``allOf if/then``). datamodel-codegen renders the event as the whole
+        tracking-event enum and cannot express either, so the accepted shape states them here,
+        as the schema violations they are (INVALID_REQUEST). ``target`` needs nothing: the SDK
+        types it as the pin's two-member enum.
+
+        Raised as pydantic errors, like the oneOf above, so the boundary's one mapping
+        turns them into the INVALID_REQUEST envelope with ``issues[]``: the refused event is
+        an ``enum`` claim (the value is outside the set this field accepts), the missing
+        offset a ``required`` one (pydantic's ``missing``).
+        """
+        for slot, value in (self.assets or {}).items():
+            for asset in value if isinstance(value, list) else [value]:
+                inner = getattr(asset, "root", asset)
+                asset_type = getattr(inner, "asset_type", None)
+                if asset_type not in ("vast_tracker", "daast_tracker"):
+                    continue
+                event_field = "vast_event" if asset_type == "vast_tracker" else "daast_event"
+                event = getattr(inner, event_field, None)
+                event = getattr(event, "value", event)
+                if event in _NON_TRACKING_EVENTS:
+                    raise PydanticCustomError(
+                        "enum",
+                        "assets.{slot}.{field}: {event} is not a TrackingEvents event",
+                        {"slot": slot, "field": event_field, "event": event, "expected": "a TrackingEvents event"},
+                    )
+                if event == "progress" and getattr(inner, "offset", None) is None:
+                    raise PydanticCustomError(
+                        "missing",
+                        "assets.{slot}.offset is required when {field} is progress",
+                        {"slot": slot, "field": event_field},
+                    )
+        return self
+
+
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
@@ -2168,7 +2249,7 @@ class PackageRequest(LibraryPackageRequest):
     # into the buyer's error pointer). A branch subclass is not a static subtype of the union,
     # so mypy reports the mismatch for any correct spelling of this field. Same ignore, same
     # reason, on SyncCreativesRequest.creatives.
-    creatives: list["CreativeAssetRequest"] | None = Field(  # type: ignore[assignment]
+    creatives: list[CreativeAssetRequest] | None = Field(  # type: ignore[assignment]
         None,
         min_length=1,
         max_length=100,
