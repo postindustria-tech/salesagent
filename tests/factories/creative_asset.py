@@ -10,7 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 import factory
-from adcp.types import CreativeAsset, FormatId
+from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
+from adcp.types.legacy import LegacyFormatId as FormatId
 
 from tests.factories.format import AGENT_URL
 

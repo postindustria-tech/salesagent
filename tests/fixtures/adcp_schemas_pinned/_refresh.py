@@ -109,8 +109,11 @@ this directory, and both are legitimate:
   before 3.1.1 (``core/activation-key.json``, vendored at 04f59d2d5);
 - the version-stamped ``/schemas/<version>/<category>/<name>.json`` — so
   ``/schemas/3.1.1/enums/error-code.json`` — that upstream's own ``$id``
-  carries at tag ``v3.1.1``, for BOTH ``enums/error-code.json`` and the
-  ``3.1.1/`` tree.
+  carries at tag ``v3.1.1``, for ``enums/error-code.json``;
+- from 3.2 on, the same version-stamped path under the canonical HTTPS origin
+  (``https://adcontextprotocol.org/schemas/3.2.7/brand.json``), which upstream
+  adopted deliberately in changeset eac2f7a for both ``$id`` and cross-file
+  ``$ref``, for the version-namespaced tree. :func:`id_origin` decides which.
 
 :func:`check_id_convention` refuses to write a file whose fetched ``$id`` is
 anything other than the URI it is vendored as — which is what makes "verbatim"
@@ -152,6 +155,7 @@ from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION, SPEC_REV
 PINNED_SHA = "467fd93d77112baf9e094e18980119edcd3a4d07"
 PINNED_VERSION = "3.1.1"  # the spec version PINNED_SHA tags; stamped into upstream's own `$id`
 REPO = "adcontextprotocol/adcp"
+SPEC_ORIGIN = "https://adcontextprotocol.org"  # 3.2+ canonical $id/$ref origin, see id_origin()
 SRC_PREFIX = f"dist/schemas/{PINNED_VERSION}"  # repo path that backs the `/schemas/...` namespace
 LOCAL_CLONE = Path.home() / "projects" / "adcp"
 FIXTURE_DIR = Path(__file__).parent
@@ -206,6 +210,17 @@ class IdConventionError(RuntimeError):
     """A fetched schema's ``$id`` does not follow the vendoring convention."""
 
 
+def id_origin(ref: str) -> str:
+    """The origin upstream prefixes to *ref*'s ``$id``: none before 3.2, HTTPS from 3.2.
+
+    Spec changeset eac2f7a (3.2) emits "canonical version-qualified HTTPS ``$id`` and
+    external ``$ref`` values in published schema artifacts". Keyed on the version segment
+    the ref itself carries, so the version-free and 3.1 forms keep their site-rooted ``$id``.
+    """
+    match = re.match(r"^/schemas/(\d+)\.(\d+)\.\d+/", ref)
+    return SPEC_ORIGIN if match and (int(match.group(1)), int(match.group(2))) >= (3, 2) else ""
+
+
 def expected_id(ref: str, version: str = "") -> str:
     """Upstream's own ``$id`` for *ref*, at the revision *ref* is fetched from.
 
@@ -220,7 +235,7 @@ def expected_id(ref: str, version: str = "") -> str:
     a form the pinned commit stopped shipping.
     """
     if not version:
-        return ref
+        return id_origin(ref) + ref
     return f"/schemas/{version}" + ref[len("/schemas") :]
 
 
@@ -267,7 +282,7 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str, id_version: str = "")
     stack = list(roots)
     written = 0
     while stack:
-        ref = stack.pop().split("#")[0]
+        ref = stack.pop().split("#")[0].removeprefix(SPEC_ORIGIN)
         if not ref.startswith("/schemas/") or ref in seen:
             continue
         seen.add(ref)

@@ -11,7 +11,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import FormatId
+from adcp.types.legacy import LegacyFormatId as FormatId
 
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context

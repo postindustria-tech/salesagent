@@ -25,11 +25,10 @@ from collections.abc import Collection, Iterable
 from enum import Enum
 from typing import Any, NamedTuple
 
+from adcp.types.generated_poc.core.experimental_feature_id import ExperimentalFeatureId as ExperimentalFeature
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
-    ExperimentalFeature,
-    ReportingDeliveryMethod,
-    SupportedProtocol,
+    CapabilityReportingDeliveryMethod as ReportingDeliveryMethod,
 )
 
 # `Measurement` is aliased `LibraryMeasurementDeclaration`, NOT the conventional
@@ -43,6 +42,9 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 # "simplify" it back to `LibraryMeasurement`.
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Measurement as LibraryMeasurementDeclaration,
+)
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    SupportedProtocol,
 )
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -871,7 +873,7 @@ class CapabilityDeclarations(BaseModel):
             for block, feature_id in _EXPERIMENTAL_FEATURE_BY_BLOCK.items()
             if getattr(self, block) is not None
         )
-        return [ExperimentalFeature(root=i) for i in ids] or None
+        return [ExperimentalFeature(i) for i in ids] or None
 
 
 # Every key in the table must name a real declarable block. With the previous

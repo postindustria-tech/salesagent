@@ -30,6 +30,7 @@ skip.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -186,11 +187,55 @@ def _resolve_filename(filename: str) -> Path:
     return hits[0]
 
 
+#: The origin AdCP 3.2 publishes every schema ``$id`` and cross-file ``$ref`` under
+#: (spec changeset eac2f7a, "canonical version-qualified HTTPS ``$id``"). Through 3.1 the
+#: SDK tree used file-relative refs and the spec tag site-rooted ``/schemas/<version>/``.
+SPEC_ORIGIN = "https://adcontextprotocol.org"
+
+
+def _localize_ref(ref: str, path: Path) -> str:
+    """*ref* rewritten from 3.2's canonical HTTPS form into its tree's local convention.
+
+    Inside the SDK tree, a canonical ref becomes a path relative to the referring file,
+    which is the form every resolver here already follows. Elsewhere (a vendored tag
+    tree) it becomes the site-rooted ``/schemas/<version>/...`` form that tree's
+    resolver keys on. A canonical ref naming a spec version other than the installed
+    SDK's is unresolvable in the SDK tree, and raises rather than silently grading
+    against a different pin.
+    """
+    if not ref.startswith(SPEC_ORIGIN + "/schemas/"):
+        return ref
+    site_rooted = ref[len(SPEC_ORIGIN) :]
+    root = schema_root()
+    if not path.resolve().is_relative_to(root.resolve()):
+        return site_rooted
+    import adcp
+
+    prefix = f"/schemas/{adcp.get_adcp_spec_version()}/"
+    if not site_rooted.startswith(prefix):
+        raise PinnedSchemaError(f"{path}: $ref {ref!r} names a spec version other than the pinned SDK's")
+    target, _, fragment = site_rooted[len(prefix) :].partition("#")
+    rel = os.path.relpath(root / target, path.parent).replace(os.sep, "/")
+    return rel + (f"#{fragment}" if fragment else "")
+
+
+def _localize_refs(node: Any, path: Path) -> Any:
+    if isinstance(node, dict):
+        return {
+            key: _localize_ref(value, path) if key == "$ref" and isinstance(value, str) else _localize_refs(value, path)
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_localize_refs(item, path) for item in node]
+    return node
+
+
 def _load_with_id(path: Path) -> dict[str, Any]:
     """Load a schema file, stamping its own ``file://`` URI as ``$id`` so its
     relative ``$ref``s (and any ``$ref``s INTO it from a sibling schema)
-    resolve deterministically."""
-    schema = json.loads(path.read_text())
+    resolve deterministically. Canonical HTTPS refs are localized first
+    (:func:`_localize_ref`)."""
+    schema = _localize_refs(json.loads(path.read_text()), path)
     return {**schema, "$id": path.as_uri()}
 
 

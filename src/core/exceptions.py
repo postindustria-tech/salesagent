@@ -673,6 +673,19 @@ class AdCPRequestSignatureComponentsUnexpectedError(AdCPRequestSignatureError):
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED
 
 
+class AdCPRequestBodyMalformedError(AdCPRequestSignatureError):
+    """The signed body cannot be read as exactly one AdCP operation (401).
+
+    AdCP 3.2.7 ``security.mdx`` § Transport error taxonomy: the body contains duplicate object
+    keys, or an A2A message does not resolve to exactly one AdCP operation (the
+    parser-differential vectors).
+
+    Wire code ``request_body_malformed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_BODY_MALFORMED
+
+
 class AdCPRequestSignatureDigestMismatchError(AdCPRequestSignatureError):
     """The Content-Digest header does not describe the body that arrived (401).
 
@@ -888,6 +901,7 @@ class AdCPRequestTargetUriMalformedError(AdCPRequestSignatureError):
 #: the one normalizer from an untyped exception to a typed one.
 _SIGNATURE_ERROR_BY_CODE: Final[Mapping[SignatureErrorCode, type[AdCPRequestSignatureError]]] = MappingProxyType(
     {
+        SignatureErrorCode.REQUEST_BODY_MALFORMED: AdCPRequestBodyMalformedError,
         SignatureErrorCode.REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON: AdCPRequestSignatureAgentNotInBrandJsonError,
         SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED: AdCPRequestSignatureAlgNotAllowedError,
         SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS: AdCPRequestSignatureBrandJsonAmbiguousError,

@@ -203,7 +203,7 @@ def when_sync_creative_with_agent_url(ctx: dict, agent_url: str) -> None:
     decision, and that VALIDATION_ERROR resembles a refusal closely enough to
     pass a careless assertion for entirely the wrong reason.
     """
-    from adcp.types import FormatId
+    from adcp.types.legacy import LegacyFormatId as FormatId
 
     from tests.factories.creative_asset import CreativeAssetFactory
 

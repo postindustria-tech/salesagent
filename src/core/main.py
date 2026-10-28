@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import Tool, ToolResult
+from fastmcp.tools import Tool, ToolResult
 from rich.console import Console
 
 from src.adapters.mock_creative_engine import MockCreativeEngine

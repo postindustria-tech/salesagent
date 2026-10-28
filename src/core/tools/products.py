@@ -8,10 +8,11 @@ import logging
 import time
 from typing import Any, cast
 
-# FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId
-from adcp import Product as LibraryProduct
+from adcp.types import Product as LibraryProduct
 from adcp.types import PropertyListReference
+
+# FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
+from adcp.types.legacy import LegacyFormatId as FormatId
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger

@@ -7,7 +7,7 @@ scattering the same RootModel-unwrapping logic across multiple modules.
 import logging
 from typing import Any
 
-from adcp.types import CreativeAsset
+from adcp.types import CreativeAsset as CreativeAsset
 from adcp.types.generated_poc.creative.list_creatives_response import Creative as LibraryCreative
 from pydantic import TypeAdapter, ValidationError
 

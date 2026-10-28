@@ -1,13 +1,13 @@
 # AdCP Spec Version
 
-Prebid Sales Agent targets **AdCP spec version 3.1.1** via the `adcp==6.6.0`
+Prebid Sales Agent targets **AdCP spec version 3.2.7** via the `adcp==9.3.0`
 Python SDK (pinned exactly in `pyproject.toml`).
 
 ## Verifying the current target
 
 ```bash
 uv run python -c "import adcp; print(adcp.get_adcp_spec_version(), adcp.get_adcp_sdk_version())"
-# 3.1.1 6.6.0
+# 3.2.7 9.3.0
 ```
 
 The same command tells you what spec version any other SDK release targets —
@@ -16,7 +16,7 @@ use it instead of looking for a version table.
 ## CI guard
 
 `tests/unit/test_adcp_spec_version.py` asserts the installed SDK targets
-`3.1.1`. A pin shift fails that test, forcing a deliberate update across
+`3.2.7`. A pin shift fails that test, forcing a deliberate update across
 `pyproject.toml`, the test's `EXPECTED_SPEC_VERSION` constant, and this
 document. That guard also reads this document and CLAUDE.md, so prose here
 that presents a version other than the pin as **the** pin fails it too.
@@ -26,18 +26,18 @@ that presents a version other than the pin as **the** pin fails it too.
 `github.com/adcontextprotocol/adcp`, read at the pinned tag only:
 
 ```bash
-git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/<path>      # type shapes
-git -C ~/projects/adcp show v3.1.1:dist/compliance/3.1.1/<path>   # graded storyboards
-git -C ~/projects/adcp show v3.1.1:docs/<path>                    # prose
+git -C ~/projects/adcp show v3.2.7:dist/schemas/3.2.7/<path>      # type shapes
+git -C ~/projects/adcp show v3.2.7:dist/compliance/3.2.7/<path>   # graded storyboards
+git -C ~/projects/adcp show v3.2.7:docs/<path>                    # prose
 ```
 
 Note the asymmetry in that third line, because it is the one that has been copied
 wrong. Schemas and storyboards live under a version-numbered `dist/` root, and prose
-does not: `dist/docs/` stops at `3.1.0`, so `dist/docs/3.1.1/` resolves at no tag. Prose
+does not: `dist/docs/` stops at `3.2.3`, so `dist/docs/3.2.7/` resolves at no tag. Prose
 is read from the repository-root `docs/` tree at the pinned ref, which is what makes the
 ref rather than the path carry the version.
 
-Verify a citation resolves before you rely on it — `git cat-file -e v3.1.1:<path>` exits
+Verify a citation resolves before you rely on it — `git cat-file -e v3.2.7:<path>` exits
 non-zero when it does not.
 
 The checked-out working tree of that repo is **not** the pinned version. The
@@ -52,7 +52,7 @@ job downloads), and only falls back to a personal `~/projects/adcp` clone.
 
 ## `status` vs `media_buy_status` on media-buy responses
 
-The SDK **pin** (`adcp==6.6.0`, spec **3.1.1**) fixes the request/response
+The SDK **pin** (`adcp==9.3.0`, spec **3.2.7**) fixes the request/response
 *type shapes* we build against. It does **not** always fix the graded
 *behavior*. One field is worth spelling out: the `media_buy_status` dual-emit
 on create-/update-media-buy responses.
@@ -166,14 +166,17 @@ than being rewritten onto the pin — a ref in that form means the caller believ
 it is grading something other than the pin, and quietly redirecting it hides
 that.
 
-A version-prefixed ref (`3.1.1/adagents.json`, spelled from
+A version-prefixed ref (`3.2.7/adagents.json`, spelled from
 `EXPECTED_SPEC_VERSION` rather than as a literal) deliberately selects a SECOND
 source instead: the vendored, version-namespaced tree at
 `tests/fixtures/adcp_schemas_pinned/<version>/`, which holds the spec repo's own
-documents fetched verbatim at tag `v3.1.1`. Of the 73 vendored files, 29 differ
-STRUCTURALLY from the SDK's generated copies — including the trust-root
-documents where `signing_keys[]` lives — which is why they are vendored at all,
-and the spec-grounding gate is why they win for those documents. That tree is a
+documents fetched verbatim at tag `v3.2.7`. At 3.1.1, 29 of the 73 vendored files
+differed STRUCTURALLY from the SDK's generated copies — including the trust-root
+documents where `signing_keys[]` lives — which is why they were vendored at all,
+and the spec-grounding gate is why they win for those documents. At 3.2.7 none of
+the 112 differ (compared with `$id` dropped and `$ref`s reduced to their path), so
+the tree is now a cross-check rather than a correction; retiring it is a separate,
+reviewed change. That tree is a
 pin in its own right: `tests/integration/test_trust_root_documents.py` consumes
 it, step 5 of the bump procedure re-vendors it, and
 `test_the_vendored_schema_tree_matches_the_pin` fails until its directory name
@@ -223,7 +226,7 @@ bump must still consider it separately from the schema-shape pin above.
 - `tests/helpers/adcp_pin.py` — `EXPECTED_SPEC_VERSION`, the one constant the guards and the version-prefixed refs read
 - `tests/unit/test_pinned_schema_single_source.py` — pins that `pinned_schema.py` tracks the SDK's own version, not an independently vendored one
 - `tests/helpers/adcp_schema_validator.py` — e2e request/response validation, delegates to `pinned_schema.py`
-- `tests/fixtures/adcp_schemas_pinned/<version>/` — the spec repo's own trust-root documents at tag `v3.1.1`, selected by a version-prefixed ref; consumer `tests/integration/test_trust_root_documents.py`. Pin-coupled: `test_the_vendored_schema_tree_matches_the_pin`
+- `tests/fixtures/adcp_schemas_pinned/<version>/` — the spec repo's own trust-root documents at tag `v3.2.7`, selected by a version-prefixed ref; consumer `tests/integration/test_trust_root_documents.py`. Pin-coupled: `test_the_vendored_schema_tree_matches_the_pin`
 - `tests/fixtures/adcp_schemas_pinned/enums/error-code.json` — SHA-pinned `enumMetadata` `suggestion` text with no content reader left (see "Pinned schema sources"); retired by the #1883 reconciliation — NOT a general schema-shape source
 - `tests/fixtures/adcp_storyboards_pinned/index.json` — vendored, offline snapshot of the pinned compliance tree's storyboard structure (paths, phases, gates); pin-coupled, refreshed via its `_refresh.py`. Guarded by `tests/unit/test_architecture_storyboard_binding.py`'s `test_fixture_index_version_matches_the_pin`
 - `tests/storyboard/runner/package.json` — the TS conformance runner's `@adcp/sdk` pin; pin-coupled, independently of the Python SDK pin above. Guarded by `tests/storyboard/test_runner_sdk_pin.py`
