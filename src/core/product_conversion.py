@@ -21,6 +21,7 @@ from adcp.types.generated_poc.pricing_options.time_option import Parameters as T
 # Import our extended Product (includes implementation_config) and the local
 # pricing member subclasses (our extra policy + internal adapter annotations)
 # — not the raw SDK types (Pattern #1 / local-schema-imports guard).
+from src.core.format_options import format_options_for
 from src.core.schemas import (
     CpaPricingOption,
     CpcPricingOption,
@@ -404,7 +405,14 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
             f"Products must specify supported creative formats to be available for purchase. "
             f"Configure format_ids on the product or its inventory profile."
         )
-    product_data["format_ids"] = effective_formats
+    format_options = format_options_for(effective_formats, product_id=product_model.product_id)
+    if not format_options:
+        raise ValueError(
+            f"Product {product_model.product_id} has no format with a canonical projection. "
+            f"AdCP 3.2 products must carry format_options; configure a format the reference "
+            f"catalog maps (see src/core/format_options.py)."
+        )
+    product_data["format_options"] = format_options
 
     # publisher_properties: Use effective_properties which returns AdCP 2.0.0 discriminated union format
     effective_props = product_model.effective_properties
