@@ -40,7 +40,6 @@ from adcp.types import CpvPricingOption as LibraryCpvPricingOption
 from adcp.types import FlatRatePricingOption as LibraryFlatRatePricingOption
 from adcp.types import TimeBasedPricingOption as LibraryTimeBasedPricingOption
 from adcp.types import VcpmPricingOption as LibraryVcpmPricingOption
-
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from src.core.config import get_pydantic_extra_mode

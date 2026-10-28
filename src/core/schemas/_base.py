@@ -42,12 +42,20 @@ from adcp.types import (
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
     ProtocolEnvelope,
 )
+from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
 from adcp.types import GetAdcpCapabilitiesResponse as LibraryGetAdcpCapabilitiesResponse
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
+from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import GetTaskStatusResponse as LibraryGetTaskStatusResponse
 from adcp.types import ListTasksRequest as LibraryListTasksRequest
 from adcp.types import ListTasksResponse as LibraryListTasksResponse
+from adcp.types import PackageRequest as LibraryPackageRequest
+
+# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types import PackageUpdate as LibraryPackageUpdate
+from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
@@ -100,20 +108,12 @@ from adcp.types.generated_poc.protocol.get_task_status_request import (
     GetTaskStatusRequest as LibraryGetTaskStatusRequest,
 )
 from adcp.types.generated_poc.protocol.list_tasks_response import Task as LibraryTaskSummary
-from adcp.types.legacy import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 
 # Import main request/response types from stable API
 from adcp.types.legacy import LegacyFormat as LibraryFormat
 
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types.legacy import LegacyFormatId as LibraryFormatId
-from adcp.types.legacy import LegacyGetMediaBuysResponse as LibraryGetMediaBuysResponse
-from adcp.types.legacy import LegacyPackageRequest as LibraryPackageRequest
-
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types.legacy import LegacyPackageUpdate as LibraryPackageUpdate
-from adcp.types.legacy import LegacyUpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT

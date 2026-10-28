@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
+from adcp.types import CreativeAsset as CreativeAsset
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
 from src.core.exceptions import (

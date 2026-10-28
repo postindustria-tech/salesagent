@@ -7,7 +7,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from adcp.types import CreativeAction
-from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
+from adcp.types import CreativeAsset as CreativeAsset
 from pydantic import BaseModel
 
 from src.core.database.repositories.uow import CreativeUoW

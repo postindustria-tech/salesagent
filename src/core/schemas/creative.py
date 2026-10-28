@@ -9,7 +9,10 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, ClassVar, Literal
 
+from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import CreativeStatus
+from adcp.types import ListCreativesRequest as LibraryListCreativesRequest
+from adcp.types import ListCreativesResponse as LibraryListCreativesResponse
 from adcp.types import PaginationResponse as LibraryResponsePagination
 from adcp.types import (
     QuerySummary as LibraryQuerySummary,
@@ -17,6 +20,7 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativeResult as LibrarySyncCreativeResult,
 )
+from adcp.types import SyncCreativesRequest as LibrarySyncCreativesRequest
 from adcp.types.generated_poc.core.provenance import Provenance as LibraryProvenance
 from adcp.types.generated_poc.creative.list_creatives_response import (
     Creative as LibraryCreative,
@@ -28,13 +32,9 @@ from adcp.types.generated_poc.enums.digital_source_type import DigitalSourceType
 from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
 )
-from adcp.types.legacy import LegacyCreativeAsset as LibraryCreativeAsset
 from adcp.types.legacy import LegacyFormatId as LibraryFormatId
 from adcp.types.legacy import LegacyListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
 from adcp.types.legacy import LegacyListCreativeFormatsResponse as LibraryListCreativeFormatsResponse
-from adcp.types.legacy import LegacyListCreativesRequest as LibraryListCreativesRequest
-from adcp.types.legacy import LegacyListCreativesResponse as LibraryListCreativesResponse
-from adcp.types.legacy import LegacySyncCreativesRequest as LibrarySyncCreativesRequest
 from pydantic import (
     AwareDatetime,
     ConfigDict,
