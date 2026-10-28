@@ -71,7 +71,13 @@ _FLAT_ID_CONVENTION = re.compile(r"^/schemas/[a-z0-9-]+/[a-z0-9-]+\.json$")
 # formats/canonical/…, whose upstream filenames use underscores). The version is
 # matched by SHAPE, never against a literal, so advancing a pin cannot leave
 # this pattern asserting a namespace upstream stopped shipping.
-_VERSIONED_ID_CONVENTION = re.compile(r"^/schemas/\d+\.\d+\.\d+/(?:[a-z0-9_-]+/)*[a-z0-9_-]+\.json$")
+#
+# From 3.2 the same path sits under the canonical HTTPS origin (spec changeset eac2f7a);
+# _refresh.id_origin decides which form a given version carries, and this pattern admits
+# exactly those two spellings.
+_VERSIONED_ID_CONVENTION = re.compile(
+    r"^(?:https://adcontextprotocol\.org)?/schemas/\d+\.\d+\.\d+/(?:[a-z0-9_-]+/)*[a-z0-9_-]+\.json$"
+)
 
 # The one flat-tree file whose $id IS version-qualified, and why: it is pinned
 # by SHA-256 to the v3.1.1 TAG's copy (tests/unit/test_guards_error_code_fixture_pin.py,
@@ -136,7 +142,7 @@ def _expected_id(path: Path) -> str:
     version = _spec_version_of(path)
     if version is not None and not rel.startswith(f"{version}/"):
         rel = f"{version}/{rel}"
-    return f"/schemas/{rel}"
+    return _refresh.id_origin(f"/schemas/{rel}") + f"/schemas/{rel}"
 
 
 def _versioned_tree_files() -> list[Path]:
