@@ -41,16 +41,7 @@ from adcp.types import FlatRatePricingOption as LibraryFlatRatePricingOption
 from adcp.types import TimeBasedPricingOption as LibraryTimeBasedPricingOption
 from adcp.types import VcpmPricingOption as LibraryVcpmPricingOption
 
-# The SDK's RootModel wrapper. NOT importable as adcp.types.PricingOption —
-# that public name is a plain Union alias over the members, not the wrapper.
-# Underscore-prefixed (not the usual Library* alias) on purpose: the
-# schema-inheritance guard maps every Library* alias against the PACKAGE-level
-# class of the same bare name, and src.core.schemas.PricingOption is still the
-# legacy flat model (see the naming note above), not this wrapper's subclass.
-from adcp.types.generated_poc.core.pricing_option import (
-    PricingOption as _LibraryPricingOption,
-)
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -156,15 +147,19 @@ AdCPPricingOption = (
 )
 
 
-class PricingOption(_LibraryPricingOption):
-    """The SDK's RootModel wrapper, narrowed to OUR union members.
+class PricingOption(RootModel[AdCPPricingOption]):
+    """A RootModel over OUR union members.
+
+    Through adcp 6.x the SDK shipped this wrapper and this class narrowed it; adcp 8+
+    generates ``core/pricing-option.json`` as a bare discriminated union, so the wrapper is
+    now local. It omits the 3.2 ``revenue_share`` member, which this seller does not offer.
 
     ``Product.pricing_options`` is typed with this wrapper so every element
     carries the local members' extra policy and internal annotations while the
     call-site contract (``option.root``, proxied attribute access via the
     inherited ``__getattr__``) stays identical to the SDK wrapper it replaces.
     Every local member subclasses its SDK counterpart, so this root type is a
-    strict narrowing of the parent's.
+    strict narrowing of the SDK union.
     """
 
     root: Annotated[

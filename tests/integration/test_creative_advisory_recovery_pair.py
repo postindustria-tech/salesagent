@@ -103,7 +103,8 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from adcp.types import CreativeAsset, FormatId
+from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
+from adcp.types.legacy import LegacyFormatId as FormatId
 
 from src.core.exceptions import AdCPConfigurationError
 from tests.factories.creative_asset import CreativeAssetFactory, build_assets, text_spec

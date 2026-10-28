@@ -25,9 +25,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-# FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import ListCreativeFormatsRequest
 from adcp.types import AssetContentType as AssetType
+
+# FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
+from adcp.types.legacy import LegacyListCreativeFormatsRequest as ListCreativeFormatsRequest
 from pydantic import ValidationError
 
 from src.core.config import get_settings

@@ -10,19 +10,6 @@ from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
-from adcp.types import FormatId as LibraryFormatId
-from adcp.types import (
-    ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
-)
-from adcp.types import (
-    ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
-)
-from adcp.types import (
-    ListCreativesRequest as LibraryListCreativesRequest,
-)
-from adcp.types import (
-    ListCreativesResponse as LibraryListCreativesResponse,
-)
 from adcp.types import PaginationResponse as LibraryResponsePagination
 from adcp.types import (
     QuerySummary as LibraryQuerySummary,
@@ -30,15 +17,6 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativeResult as LibrarySyncCreativeResult,
 )
-from adcp.types import (
-    SyncCreativesRequest as LibrarySyncCreativesRequest,
-)
-
-# The BRANCH, named at its generated path. ``adcp.types.CreativeAsset`` binds to this same
-# class at RUNTIME, but mypy resolves the public alias to the RootModel UNION, so static and
-# runtime disagreed about what this model extends. Same adcp codegen defect as the pointer
-# problem documented on Creative below; unreported upstream.
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset1 as LibraryCreativeAsset
 from adcp.types.generated_poc.core.provenance import Provenance as LibraryProvenance
 from adcp.types.generated_poc.creative.list_creatives_response import (
     Creative as LibraryCreative,
@@ -50,6 +28,13 @@ from adcp.types.generated_poc.enums.digital_source_type import DigitalSourceType
 from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
 )
+from adcp.types.legacy import LegacyCreativeAsset as LibraryCreativeAsset
+from adcp.types.legacy import LegacyFormatId as LibraryFormatId
+from adcp.types.legacy import LegacyListCreativeFormatsRequest as LibraryListCreativeFormatsRequest
+from adcp.types.legacy import LegacyListCreativeFormatsResponse as LibraryListCreativeFormatsResponse
+from adcp.types.legacy import LegacyListCreativesRequest as LibraryListCreativesRequest
+from adcp.types.legacy import LegacyListCreativesResponse as LibraryListCreativesResponse
+from adcp.types.legacy import LegacySyncCreativesRequest as LibrarySyncCreativesRequest
 from pydantic import (
     AwareDatetime,
     ConfigDict,
@@ -676,9 +661,8 @@ class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativ
     def _parse_as_local_format(cls, v: Any) -> Any:
         """Parse each format as the local Format, not the inherited library Format.
 
-        The library Format loses canonical_parameters.format_kind and .params (see
-        ProductFormatDeclaration), so a response re-parsed from its own wire dropped both.
-        The field is not redeclared as ``list[Format]`` because list is invariant and mypy
+        The inherited field is typed as the library Format, so without this a parsed
+        response carries library instances rather than this seller's. The field is not redeclared as ``list[Format]`` because list is invariant and mypy
         refuses the narrowing; a local Format is a library Format, so the inherited field
         keeps the instance and NestedModelSerializerMixin serializes it by instance.
         """

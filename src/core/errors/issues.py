@@ -185,6 +185,7 @@ PYDANTIC_KEYWORD_MAP: dict[str, JsonSchemaKeyword | None] = {
     "too_short": "minItems",
     # Lexical shape.
     "string_pattern_mismatch": "pattern",
+    "string_not_ascii": "pattern",  # pydantic 2.13 `ascii_only`: a lexical restriction, which JSON Schema spells as a pattern
     "url_parsing": "format",
     "url_scheme": "format",
     "url_syntax_violation": "format",

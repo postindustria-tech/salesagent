@@ -72,28 +72,20 @@ class TestSchemaMatchesLibrary:
         Non-spec fields should be explicitly documented and eventually removed.
         """
         from adcp import (
-            CreateMediaBuyRequest as LibCreateMediaBuyRequest,
-        )
-        from adcp import (
             GetMediaBuyDeliveryRequest as LibGetMediaBuyDeliveryRequest,
         )
         from adcp import (
             GetSignalsRequest as LibGetSignalsRequest,
         )
-
-        # We define it locally in src/core/schemas.py
-        from adcp import (
-            ListCreativeFormatsRequest as LibListCreativeFormatsRequest,
-        )
-        from adcp import (
-            ListCreativesRequest as LibListCreativesRequest,
-        )
-        from adcp import (
-            SyncCreativesRequest as LibSyncCreativesRequest,
-        )
         from adcp.types import (
             GetProductsWholesaleRequest as LibGetProductsRequest,
         )
+        from adcp.types.legacy import LegacyCreateMediaBuyRequest as LibCreateMediaBuyRequest
+
+        # We define it locally in src/core/schemas.py
+        from adcp.types.legacy import LegacyListCreativeFormatsRequest as LibListCreativeFormatsRequest
+        from adcp.types.legacy import LegacyListCreativesRequest as LibListCreativesRequest
+        from adcp.types.legacy import LegacySyncCreativesRequest as LibSyncCreativesRequest
 
         from src.core.schemas import (
             CreateMediaBuyRequest as LocalCreateMediaBuyRequest,
@@ -202,7 +194,7 @@ class TestSchemaMatchesLibrary:
 
         In adcp 3.6.0, brand (BrandReference) is required for CreateMediaBuyRequest.
         """
-        from adcp import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+        from adcp.types.legacy import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
         from pydantic import ValidationError
 
         # Library should require brand for CreateMediaBuyRequest
@@ -1538,13 +1530,12 @@ class TestAdCPContract:
 
         Now extends library ListCreativesRequest directly - all fields are spec-compliant.
         """
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
-
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
         from adcp.types import PaginationRequest
         from adcp.types.generated_poc.creative.list_creatives_request import (
             Sort as LibrarySort,
         )  # TODO: different Sort from adcp.types.Sort
+        from adcp.types.legacy import LegacyCreativeFilters as LibraryCreativeFilters
 
         from src.core.schemas import ListCreativesRequest
 

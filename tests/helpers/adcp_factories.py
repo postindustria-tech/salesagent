@@ -12,9 +12,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # Import types from adcp library - use public API when available
-from adcp import Format, Property
-from adcp.types import CreativeAsset, FormatId
+from adcp import Property
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
+from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
+from adcp.types.legacy import LegacyFormat as Format
+from adcp.types.legacy import LegacyFormatId as FormatId
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.product_conversion import default_reporting_capabilities

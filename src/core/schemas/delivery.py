@@ -16,9 +16,7 @@ from adcp.types import DeliveryMetrics as LibraryDeliveryMetrics
 from adcp.types import (
     DeliveryStatus,  # noqa: F401 — re-exported for backward compat
 )
-from adcp.types import GetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
-from adcp.types import GetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.generated_poc.core.geo_delivery_metrics import (
@@ -27,12 +25,14 @@ from adcp.types.generated_poc.core.geo_delivery_metrics import (
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     ByDeviceTypeItem as LibraryByDeviceTypeItem,
 )  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
-    ByPlacementItem as LibraryByPlacementItem,
-)  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.placement_delivery_metrics import (
+    PlacementDeliveryMetrics as LibraryByPlacementItem,
+)  # adcp 8: inline ByPlacementItem promoted to named $ref type PlacementDeliveryMetrics
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     MediaBuyDelivery as LibraryMediaBuyDelivery,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.legacy import LegacyGetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
+from adcp.types.legacy import LegacyGetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode

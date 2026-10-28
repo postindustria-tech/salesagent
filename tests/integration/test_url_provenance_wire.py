@@ -234,7 +234,7 @@ class TestAnOperatorRefusalNamesNoEndpoint:
             env.set_run_async_result([FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})])
             registry.preview_creative.side_effect = OutboundRequestBlocked()
 
-            from adcp.types import FormatId
+            from adcp.types.legacy import LegacyFormatId as FormatId
 
             with caplog.at_level(logging.ERROR):
                 result = env.call_via(

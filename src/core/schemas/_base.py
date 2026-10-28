@@ -29,7 +29,6 @@ from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
-    CanonicalFormatKind,
     ContextObject,
     # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
     # this module — Snapshot and GetMediaBuysMediaBuy inherit them from their library
@@ -43,26 +42,12 @@ from adcp.types import (
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
     ProtocolEnvelope,
 )
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-
-# Import main request/response types from stable API
-from adcp.types import Format as LibraryFormat
-
-# Import types from stable API (per adcp 2.7.0+)
-from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
 from adcp.types import GetAdcpCapabilitiesResponse as LibraryGetAdcpCapabilitiesResponse
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
-from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import GetTaskStatusResponse as LibraryGetTaskStatusResponse
 from adcp.types import ListTasksRequest as LibraryListTasksRequest
 from adcp.types import ListTasksResponse as LibraryListTasksResponse
-from adcp.types import PackageRequest as LibraryPackageRequest
-
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types import PackageUpdate as LibraryPackageUpdate
-from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
@@ -83,9 +68,6 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.product_format_declaration import (
-    ProductFormatDeclaration as LibraryProductFormatDeclaration,
-)
 from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
 from adcp.types.generated_poc.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
@@ -118,6 +100,20 @@ from adcp.types.generated_poc.protocol.get_task_status_request import (
     GetTaskStatusRequest as LibraryGetTaskStatusRequest,
 )
 from adcp.types.generated_poc.protocol.list_tasks_response import Task as LibraryTaskSummary
+from adcp.types.legacy import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+
+# Import main request/response types from stable API
+from adcp.types.legacy import LegacyFormat as LibraryFormat
+
+# Import types from stable API (per adcp 2.7.0+)
+from adcp.types.legacy import LegacyFormatId as LibraryFormatId
+from adcp.types.legacy import LegacyGetMediaBuysResponse as LibraryGetMediaBuysResponse
+from adcp.types.legacy import LegacyPackageRequest as LibraryPackageRequest
+
+# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types.legacy import LegacyPackageUpdate as LibraryPackageUpdate
+from adcp.types.legacy import LegacyUpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
@@ -1572,23 +1568,6 @@ class FormatReference(SalesAgentBaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
-class ProductFormatDeclaration(LibraryProductFormatDeclaration):
-    """Format.canonical_parameters, with the two fields the generated class lacks.
-
-    3.1.1 core/product-format-declaration.json is a oneOf over format kinds, and every
-    branch requires ``format_kind`` and ``params``. adcp 6.6.0 generated only the shared
-    base properties and ignores extras, so parsing a creative agent's catalog dropped
-    both and served ``{"canonical_formats_only": false, "experimental": false}``, which
-    the pinned schema rejects. ``params`` is per-kind in the schema; it is carried as a
-    dict, as the SDK's own hand-written declaration (adcp.types.canonical_decl) does.
-    7.0.3 has the same gap; 8.0 (AdCP 3.2) generates the union. Delete this class when
-    the SDK pin carries the fix (adcontextprotocol/adcp-client-python#1275).
-    """
-
-    format_kind: CanonicalFormatKind
-    params: dict[str, Any]
-
-
 class Format(LibraryFormat):
     """Creative format definition per AdCP spec.
 
@@ -1599,11 +1578,6 @@ class Format(LibraryFormat):
     Note: All spec-defined fields are inherited from adcp.types.stable.Format.
     We only add internal fields here marked with exclude=True.
     """
-
-    # Narrowed to the local subclass above: the library type loses format_kind and params.
-    canonical_parameters: ProductFormatDeclaration | None = Field(
-        default=None, deprecated=True, description=LibraryFormat.model_fields["canonical_parameters"].description
-    )
 
     # Internal fields for backward compatibility and convenience
     # These are NOT part of the AdCP spec and are excluded from serialization
