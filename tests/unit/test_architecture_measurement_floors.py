@@ -58,6 +58,8 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "codes-declared-code-reaches-buyer",
+        # local-gam-delivery-report.feature: the delivery env with the REAL GAM adapter.
+        "gam-delivery",
         # The context echo, graded on every outcome across all four transports. Three routes.
         # Two because the scenarios need both a read tool and a write tool: a schema rejection
         # and a seller's own refusal do not both reach the buyer from one tool.
@@ -83,6 +85,12 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # A publisher's adagents.json naming this agent, graded through the three admin
         # actions that read it. Pinned in the change that registered the route.
         "pubauth",
+        # GAM creative trafficking, graded on what the seller sends GAM's SOAP client.
+        # Pinned in the change that registered the route.
+        "gamtraffic",
+        # GAM buy read-back (status and per-package delivery after a create through a GAM
+        # seller). Pinned in the change that registered the route.
+        "gamreadback",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

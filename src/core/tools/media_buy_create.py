@@ -64,6 +64,9 @@ class PackageAssignmentDict(TypedDict):
 
     package_id: str
     weight: int
+    #: The ad server's line item for the package (package_config["platform_line_item_id"]),
+    #: None when the adapter created none. An adapter associates by this, never by name.
+    platform_line_item_id: str | None
 
 
 logger = logging.getLogger(__name__)
@@ -92,7 +95,7 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
-from src.core.helpers.pricing_helpers import pricing_info_for
+from src.core.helpers.pricing_helpers import package_volume, pricing_info_for
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity, identity_of
 from src.core.schemas import (
@@ -183,8 +186,10 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
       spec-defined field) is preserved and takes precedence over this fallback.
     """
     data = dict(existing_data or {})
-    if status.creative_id and not data.get("platform_creative_id"):
-        data["platform_creative_id"] = status.creative_id
+    # The ad server's id, never ``status.creative_id`` (the buyer's id the status is
+    # about): a failed push reports no platform id, so it records nothing.
+    if status.platform_creative_id and not data.get("platform_creative_id"):
+        data["platform_creative_id"] = status.platform_creative_id
     if status.concept_id and not data.get("concept_id"):
         data["concept_id"] = status.concept_id
         data["concept_name"] = status.concept_name
@@ -647,6 +652,86 @@ def _persist_adapter_package_ids(
     logger.info(f"{prefix}Saved platform_line_item_ids to database")
 
 
+def _media_package_from_request(
+    *,
+    media_buy_id: str,
+    package_id: str,
+    req_pkg: PackageRequest,
+    pricing_info: dict[str, Any] | None,
+    request_currency: str | None,
+    paused: bool = False,
+    name: str | None = None,
+) -> DBMediaPackage:
+    """The MediaPackage row for one package of a create_media_buy request.
+
+    What was booked comes from the buyer's validated request package: product, budget,
+    targeting overlay, formats. An adapter's response carries only the ids and state the
+    ad server decides (``package_id``, ``paused``); reading booked fields off it is how a
+    GAM buy came to persist packages with no product_id, which execute_approved_media_buy
+    and get_media_buys both read. Shared by the manual-approval and auto-approval paths.
+    """
+    # Serialize budget: normalize to object format for database storage
+    # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
+    budget_value: dict[str, Any] | None = None
+    if req_pkg.budget is not None:
+        if isinstance(req_pkg.budget, (int, float)):
+            # ADCP 2.5.0 flat format: normalize to object with currency from pricing
+            package_currency = request_currency  # Use request-level currency
+            if pricing_info:
+                package_currency = pricing_info.get("currency", request_currency)
+            budget_value = {
+                "total": float(req_pkg.budget),
+                "currency": package_currency,
+            }
+        else:
+            # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
+            budget_value = req_pkg.budget
+
+    # _pydantic_json_serializer on the engine handles Pydantic models,
+    # AnyUrl, enums, and datetimes in JSONType columns automatically
+    package_config = {
+        "package_id": package_id,
+        "name": name,
+        # adcp 2.12.0 replaced the status enum with this bool.
+        "paused": paused,
+        "product_id": req_pkg.product_id,
+        # Scoped to the product: two products may both name an option "cpm_usd_fixed".
+        "pricing_option_id": req_pkg.pricing_option_id,
+        "budget": budget_value,
+        "targeting_overlay": req_pkg.targeting_overlay,
+        "creative_ids": _get_creative_ids(req_pkg),
+        "format_ids": req_pkg.format_ids,
+        "pricing_info": pricing_info,  # Store pricing info for UI display
+        "impressions": getattr(req_pkg, "impressions", None),  # legacy field, for display
+    }
+
+    # Extract pricing fields for dual-write
+    budget_total = None
+    if budget_value:
+        if isinstance(budget_value, dict):
+            budget_total = budget_value.get("total")
+        elif isinstance(budget_value, (int, float)):
+            budget_total = float(budget_value)
+
+    bid_price_value = None
+    pacing_value = None
+    if pricing_info:
+        bid_price_value = pricing_info.get("bid_price")
+    if budget_value and isinstance(budget_value, dict):
+        pacing_value = budget_value.get("pacing")
+
+    # Create MediaPackage with dual-write: dedicated columns + JSON
+    return DBMediaPackage(
+        media_buy_id=media_buy_id,
+        package_id=package_id,
+        package_config=package_config,
+        # Dual-write: populate dedicated columns
+        budget=Decimal(str(budget_total)) if budget_total is not None else None,
+        bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
+        pacing=pacing_value,
+    )
+
+
 def _build_adapter_asset_from_creative(
     creative: Any,
     package_assignments: list[PackageAssignmentDict],
@@ -713,7 +798,22 @@ def _build_adapter_asset_from_creative(
     click_url = extract_click_url(creative_data, format_spec)
     impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
-    if not url or not width or not height:
+    # An HTML or JavaScript creative is its markup: AdCP 3.1.1 core/assets/html-asset.json
+    # and javascript-asset.json both require ``asset_type`` and ``content``. It goes to the
+    # ad server as a snippet. Its data["url"] is the creative agent's preview page
+    # (sync_creatives stores the preview render there), which is not the creative.
+    markup = next(
+        (
+            a
+            for a in (creative_data.get("assets") or {}).values()
+            if isinstance(a, dict) and a.get("asset_type") in {"html", "javascript"} and a.get("content")
+        ),
+        None,
+    )
+    if markup:
+        url = None
+
+    if not (url or markup) or not width or not height:
         return None, (
             f"Creative {creative.creative_id} missing url/width/height "
             f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={creative.format})"
@@ -729,6 +829,9 @@ def _build_adapter_asset_from_creative(
         "asset_type": creative_data.get("asset_type", "image"),
         "name": creative.name or f"Creative {creative.creative_id}",
     }
+    if markup:
+        asset["snippet"] = markup["content"]
+        asset["snippet_type"] = markup["asset_type"]
     if impression_tracker_url:
         asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
 
@@ -989,14 +1092,11 @@ def execute_approved_media_buy(
                     budget_data = package_config.get("budget")
                     if isinstance(budget_data, dict):
                         # Legacy dict format (Budget object) - extract total
-                        total_budget = float(budget_data.get("total", 0.0))
-                        budget = total_budget  # MediaPackage expects float
+                        budget = float(budget_data.get("total", 0.0))
                     elif isinstance(budget_data, (int, float)):
                         # AdCP 2.5.0 format - flat number
-                        total_budget = float(budget_data)
-                        budget = total_budget  # MediaPackage expects float
+                        budget = float(budget_data)
                     else:
-                        total_budget = 0.0
                         budget = None
 
                     # Get pricing option from product
@@ -1021,20 +1121,16 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Calculate CPM and impressions (convert Decimal to float for math operations)
-                    cpm = float(pricing_option_inner.rate) if pricing_option_inner.rate else 0.0
-                    impressions = int(total_budget / cpm * 1000) if cpm > 0 else 0
+                    # Reconstruct package_pricing_info from package_config if available:
+                    # the stored pricing_info carries the bid_price for auction pricing.
+                    # Buys stored without it fall back to the option's terms with no
+                    # bid_price, because the package that bid one is not on hand.
+                    pricing_info = package_config.get("pricing_info") or pricing_info_for(pricing_option_inner)
+                    if package_id:
+                        package_pricing_info[package_id] = pricing_info
 
-                    # Reconstruct package_pricing_info from package_config if available
-                    # This includes the bid_price for auction pricing
-                    pricing_info_from_config = package_config.get("pricing_info")
-                    if pricing_info_from_config and package_id:
-                        # Use the stored pricing_info which has the correct bid_price
-                        package_pricing_info[package_id] = pricing_info_from_config
-                    elif package_id:
-                        # Fallback for buys stored without pricing_info: the option's terms
-                        # with no bid_price, because the package that bid one is not on hand.
-                        package_pricing_info[package_id] = pricing_info_for(pricing_option_inner)
+                    # This package's volume: its own budget at the price it was sold at.
+                    cpm, impressions = package_volume(budget, pricing_info)
 
                     # Get targeting_overlay from package_config if present
                     # Fallback to "targeting" key for data written before fix.
@@ -1232,6 +1328,7 @@ def execute_approved_media_buy(
                         {
                             "package_id": assignment.package_id,
                             "weight": assignment.weight,  # From CreativeAssignment.weight (default 100)
+                            "platform_line_item_id": platform_line_item_ids.get(assignment.package_id),
                         }
                     )
 
@@ -1505,17 +1602,23 @@ def push_creative_to_existing_buy(
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
-            # platform_order_id is per-buy — any package on this buy has the same value
-            media_package = uow.media_buys.get_package(media_buy_id, matching[0].package_id)
-            if not media_package:
+            packages = {a.package_id: uow.media_buys.get_package(media_buy_id, a.package_id) for a in matching}
+            configs = {package_id: (pkg.package_config or {}) for package_id, pkg in packages.items() if pkg}
+            if not configs:
                 return False, f"No package found for media buy {media_buy_id}"
 
-            platform_order_id = (media_package.package_config or {}).get("platform_order_id")
+            # platform_order_id is per-buy — any package on this buy has the same value
+            platform_order_id = next(iter(configs.values())).get("platform_order_id")
             if not platform_order_id:
                 return False, f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
 
             package_assignments: list[PackageAssignmentDict] = [
-                {"package_id": a.package_id, "weight": a.weight or 100} for a in matching
+                {
+                    "package_id": a.package_id,
+                    "weight": a.weight or 100,
+                    "platform_line_item_id": configs.get(a.package_id, {}).get("platform_line_item_id"),
+                }
+                for a in matching
             ]
             asset, build_err = _build_adapter_asset_from_creative(creative, package_assignments, tenant_id=tenant_id)
             if build_err:
@@ -2861,65 +2964,12 @@ async def _create_media_buy_impl(
                 session = pkg_uow.session
                 for idx, req_pkg in enumerate(req.packages):
                     mapped_package_id = package_id_map[idx]
-                    pricing_info_for_package = package_pricing_info.get(mapped_package_id)
-
-                    # Serialize budget: normalize to object format for database storage
-                    # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
-                    budget_value: dict[str, Any] | None = None
-                    if req_pkg.budget is not None:
-                        if isinstance(req_pkg.budget, (int, float)):
-                            # ADCP 2.5.0 flat format: normalize to object with currency from pricing
-                            package_currency = request_currency  # Use request-level currency
-                            if pricing_info_for_package:
-                                package_currency = pricing_info_for_package.get("currency", request_currency)
-                            budget_value = {
-                                "total": float(req_pkg.budget),
-                                "currency": package_currency,
-                            }
-                        else:
-                            # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
-                            budget_value = req_pkg.budget
-
-                    # _pydantic_json_serializer on the engine handles Pydantic models,
-                    # AnyUrl, enums, and datetimes in JSONType columns automatically
-                    package_config = {
-                        "package_id": mapped_package_id,
-                        # A newly created package is not paused (adcp 2.12.0 replaced the
-                        # status enum with this bool).
-                        "paused": False,
-                        "product_id": req_pkg.product_id,
-                        "budget": budget_value,
-                        "targeting_overlay": req_pkg.targeting_overlay,
-                        "creative_ids": _get_creative_ids(req_pkg),
-                        "format_ids": req_pkg.format_ids,
-                        "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
-                        "impressions": getattr(req_pkg, "impressions", None),  # legacy field, for display
-                    }
-
-                    # Extract pricing fields for dual-write
-                    budget_total = None
-                    if budget_value:
-                        if isinstance(budget_value, dict):
-                            budget_total = budget_value.get("total")
-                        elif isinstance(budget_value, (int, float)):
-                            budget_total = float(budget_value)
-
-                    bid_price_value = None
-                    pacing_value = None
-                    if pricing_info_for_package:
-                        bid_price_value = pricing_info_for_package.get("bid_price")
-                    if budget_value and isinstance(budget_value, dict):
-                        pacing_value = budget_value.get("pacing")
-
-                    # Create MediaPackage with dual-write: dedicated columns + JSON
-                    db_package = DBMediaPackage(
+                    db_package = _media_package_from_request(
                         media_buy_id=media_buy_id,
                         package_id=mapped_package_id,
-                        package_config=package_config,
-                        # Dual-write: populate dedicated columns
-                        budget=Decimal(str(budget_total)) if budget_total is not None else None,
-                        bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
-                        pacing=pacing_value,
+                        req_pkg=req_pkg,
+                        pricing_info=package_pricing_info.get(mapped_package_id),
+                        request_currency=request_currency,
                     )
                     session.add(db_package)
 
@@ -3302,16 +3352,6 @@ async def _create_media_buy_impl(
                 else:
                     format_ids_to_use = []
 
-            # Get CPM from pricing_options
-            cpm = 10.0  # Default
-            if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
-                first_option = pkg_product.pricing_options[0]
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
-                inner_option = getattr(first_option, "root", first_option)
-                rate = getattr(inner_option, "rate", None)
-                if rate:
-                    cpm = float(rate)
-
             # Generate permanent package ID (not product_id)
             package_id = f"pkg_{pkg_product.product_id}_{secrets.token_hex(4)}_{idx}"
 
@@ -3340,13 +3380,18 @@ async def _create_media_buy_impl(
                 Literal["guaranteed", "non_guaranteed"], delivery_type_str
             )
 
+            # This package's volume: its own budget at the price of the option it selected.
+            cpm, planned_impressions = package_volume(
+                package_budget_value, package_pricing_info_by_index.get(pkg_index)
+            )
+
             packages.append(
                 MediaPackage(
                     package_id=package_id,
                     name=pkg_product.name,
                     delivery_type=delivery_type_value,
                     cpm=cpm,
-                    impressions=int(float(total_budget) / cpm * 1000),
+                    impressions=planned_impressions,
                     format_ids=cast(list[Any], format_ids_to_use),
                     targeting_overlay=cast(
                         "Targeting | None",
@@ -3427,20 +3472,16 @@ async def _create_media_buy_impl(
         for i, pkg_item in enumerate(response.packages):
             logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
 
-        # Determine initial status using centralized logic
-        # Check if creatives are assigned and approved
-        has_creatives = False
-        creatives_approved = True  # Assume approved if any exist
-
-        # Check packages for creative_ids
-        if req.packages:
-            for pkg in req.packages:
-                if _get_creative_ids(pkg):
-                    has_creatives = True
-                    # For now, assume creatives in request are not yet approved
-                    # They need to go through sync_creatives approval flow
-                    creatives_approved = False
-                    break
+        # Determine initial status using centralized logic, from the creatives the
+        # packages are about to be assigned -- inline creatives included, which the
+        # upload above synced into the library and named by id -- as they actually are.
+        assigned_creative_ids = [cid for pkg in req.packages or [] for cid in _get_creative_ids(pkg) or []]
+        has_creatives = bool(assigned_creative_ids)
+        creatives_approved = True
+        if has_creatives:
+            with MediaBuyUoW(tenant.tenant_id) as status_uow:
+                assert status_uow.creatives is not None
+                creatives_approved = not status_uow.creatives.uncleared_ids(assigned_creative_ids, principal_id)
 
         # Use centralized status determination
         now = datetime.now(UTC)
@@ -3522,56 +3563,21 @@ async def _create_media_buy_impl(
                         logger.error(error_msg)
                         raise AdCPAdapterError()
 
-                    # Store full package config as JSON
-                    # Get paused state from adapter response (adcp 2.12.0: replaced status enum with paused bool)
-                    paused = getattr(resp_package, "paused", False)  # Default to False (not paused) if not present
+                    # The adapter returns one package per request package, in request order.
+                    if not req.packages or i >= len(req.packages):
+                        logger.error(f"Adapter returned package {i} with no request package to match it")
+                        raise AdCPAdapterError()
 
-                    # Get pricing info for this package if available
-                    pricing_info_for_package = package_pricing_info.get(resp_package_id)
-
-                    # Get impressions from request package if available (legacy field)
-                    request_pkg = req.packages[i] if req.packages and i < len(req.packages) else None
-                    impressions = getattr(request_pkg, "impressions", None) if request_pkg else None
-
-                    package_config = {
-                        "package_id": resp_package_id,
-                        "name": getattr(resp_package, "name", None),  # Include package name from adapter response
-                        "product_id": getattr(resp_package, "product_id", None),
-                        "budget": getattr(resp_package, "budget", None),
-                        "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
-                        "creative_ids": getattr(resp_package, "creative_ids", None),
-                        "creative_assignments": getattr(resp_package, "creative_assignments", None),
-                        "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),
-                        "paused": paused,  # Store paused state (adcp 2.12.0)
-                        "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
-                        "impressions": impressions,  # Store impressions for display
-                    }
-
-                    # Extract pricing fields for dual-write from adapter response
-                    budget_total = None
-                    budget_data = getattr(resp_package, "budget", None)
-                    if budget_data:
-                        if isinstance(budget_data, dict):
-                            budget_total = budget_data.get("total")
-                        elif isinstance(budget_data, (int, float)):
-                            budget_total = float(budget_data)
-
-                    bid_price_value = None
-                    pacing_value = None
-                    if pricing_info_for_package:
-                        bid_price_value = pricing_info_for_package.get("bid_price")
-                    if budget_data and isinstance(budget_data, dict):
-                        pacing_value = budget_data.get("pacing")
-
-                    # Create MediaPackage with dual-write: dedicated columns + JSON
-                    db_package = DBMediaPackage(
+                    # Booked fields from the buyer's request package; package_id and
+                    # paused (adcp 2.12.0: replaced the status enum) from the adapter.
+                    db_package = _media_package_from_request(
                         media_buy_id=response.media_buy_id,
                         package_id=resp_package_id,
-                        package_config=package_config,
-                        # Dual-write: populate dedicated columns
-                        budget=Decimal(str(budget_total)) if budget_total is not None else None,
-                        bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
-                        pacing=pacing_value,
+                        req_pkg=req.packages[i],
+                        pricing_info=package_pricing_info.get(resp_package_id),
+                        request_currency=request_currency,
+                        paused=getattr(resp_package, "paused", False),
+                        name=getattr(resp_package, "name", None),
                     )
                     session.add(db_package)
 
@@ -3722,10 +3728,9 @@ async def _create_media_buy_impl(
                             logger.error(error_msg)
                             raise AdCPAdapterError()
 
-                        # Get platform_line_item_id from response if available
-                        platform_line_item_id = None
-                        if response.packages and i < len(response.packages):
-                            platform_line_item_id = getattr(response.packages[i], "platform_line_item_id", None)
+                        # The ad server's line item for this package, from the adapter's
+                        # package -> line item mapping (persisted above as platform_line_item_id)
+                        platform_line_item_id = response.platform_line_item_ids.get(response_package_id)
 
                         # Collect platform creative IDs for association
                         platform_creative_ids = []
@@ -3756,7 +3761,11 @@ async def _create_media_buy_impl(
                                 # Upload to GAM via shared asset helper
                                 try:
                                     pkg_assignments: list[PackageAssignmentDict] = [
-                                        {"package_id": response_package_id, "weight": 100}
+                                        {
+                                            "package_id": response_package_id,
+                                            "weight": 100,
+                                            "platform_line_item_id": platform_line_item_id,
+                                        }
                                     ]
                                     asset, build_err = _build_adapter_asset_from_creative(
                                         creative, pkg_assignments, tenant_id=tenant.tenant_id
@@ -3778,16 +3787,22 @@ async def _create_media_buy_impl(
                                         )
                                     )
 
+                                    # add_creative_assets associates what it creates with the
+                                    # package's line item, so an uploaded creative is not
+                                    # associated a second time below.
                                     if upload_result and len(upload_result) > 0:
                                         uploaded_status = upload_result[0]
+                                        if uploaded_status.status == "failed":
+                                            logger.error(
+                                                log_safe(
+                                                    f"Ad server refused creative {creative_id}: {uploaded_status.message}"
+                                                )
+                                            )
                                         merged_data = _apply_creative_enrichment(creative, uploaded_status)
                                         if merged_data is not None:
                                             CreativeRepository(session, tenant.tenant_id).update_data(
                                                 creative, merged_data
                                             )
-                                        pcid = (creative.data or {}).get("platform_creative_id")
-                                        if pcid:
-                                            platform_creative_ids.append(pcid)
                                 except AdCPSalesAgentError:
                                     raise
                                 except Exception as upload_error:

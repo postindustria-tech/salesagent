@@ -92,10 +92,14 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.local_gam_line_item_flight",
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.publisher_authorization",
+    "tests.bdd.steps.domain.gam_trafficking",
+    "tests.bdd.steps.domain.gam_adapter",
+    "tests.bdd.steps.domain.gam_readback",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -6006,6 +6010,25 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
         seed=_seed_tenant_and_principal,
     ),
+    # ── @gamtraffic (local GAM creative-trafficking feature) ────────────────
+    # T-GAMTRAFFIC-* identity tags, so an UNSCOPED `when` row. The env is the UC-006
+    # sync env with the GAM SOAP client as one more stand-in; the Givens seed the GAM
+    # seller themselves, so there is no route seed.
+    EnvRoute(
+        tag="gamtraffic",
+        when=lambda m: "gamtraffic" in m,
+        env_builder=_env("tests.harness.gam_creative_sync.GamCreativeSyncEnv"),
+    ),
+    # ── @gamreadback (local GAM buy read-back feature) ──────────────────────
+    # A create through the real GAM adapter, then the buyer's two reads of that buy, on
+    # one identity: the create+list env, which also routes get_media_buy_delivery. Seeded
+    # with the create chain the GAM Background builds on.
+    EnvRoute(
+        tag="gamreadback",
+        when=lambda m: "gamreadback" in m,
+        env_builder=_env("tests.harness.media_buy_create_list.MediaBuyCreateListEnv"),
+        seed=_seed_media_buy_chain,
+    ),
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
@@ -6135,6 +6158,17 @@ ENV_ROUTES: list[EnvRoute] = [
         # it takes the UC-GET-PRODUCTS branch.
         when=lambda m: any(t.startswith("T-PROTOCOL-001") for t in m),
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="gam-delivery",
+        # local-gam-delivery-report.feature grades how the REAL GAM adapter reads a GAM
+        # report, so it needs the delivery env with only GAM's client and report download
+        # replaced. Its T-UC-004-local-* tags would otherwise fall to the UC-004 rows below,
+        # whose env replaces the adapter's answer. Seeded like the UC-004 polling row, whose
+        # media-buy Givens it reuses.
+        when=lambda m: "gam_delivery" in m,
+        env_builder=_env("tests.harness.delivery_poll.GAMDeliveryPollEnv", principal_id="buyer-001"),
+        seed=_seed_delivery_poll,
     ),
     EnvRoute(
         tag="codes-declared-code-reaches-buyer",
