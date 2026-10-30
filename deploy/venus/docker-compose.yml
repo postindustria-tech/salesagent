@@ -30,20 +30,70 @@ services:
       DATABASE_URL: postgresql://adcp_user:${POSTGRES_PASSWORD}@postgres:5432/adcp?sslmode=disable
       ENVIRONMENT: production
       ADCP_SIGNING_KEY_PASSPHRASE_ENV: ADCP_SIGNING_KEK
+      CREATIVE_AGENT_URL: https://salesagent.ngrok.dev/api/creative-agent
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "127.0.0.1:${SALESAGENT_PORT:-8000}:8000"
 
+  # Pinned reference creative agent (adcp v3.1.25 = 76b031a85eb8, the pin in the branch's
+  # scripts/creative-agent-stack.sh). The live creative.adcontextprotocol.org serves formats with
+  # accepts_parameters: pixel_ratio, which adcp 6.6.0 rejects, so every format lookup fails and GAM
+  # line items are never created. The app reaches this agent through CREATIVE_AGENT_URL; format ids
+  # keep the public URL. Build: scripts/creative-agent-stack.sh build (tags adcp-creative-agent:<pin>).
+  creative-pg:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adcp_registry
+      POSTGRES_USER: adcp
+      POSTGRES_PASSWORD: ${CREATIVE_PG_PASSWORD:?set in .env}
+    volumes:
+      - creative_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp -d adcp_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  creative-agent:
+    image: ${CREATIVE_AGENT_IMAGE:-adcp-creative-agent:76b031a85eb8}
+    restart: unless-stopped
+    depends_on:
+      creative-pg:
+        condition: service_healthy
+    environment:
+      # development: without DEV_USER_* the agent needs WorkOS. Not exposed outside the compose network.
+      NODE_ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgresql://adcp:${CREATIVE_PG_PASSWORD}@creative-pg:5432/adcp_registry
+      RUN_MIGRATIONS: "true"
+      ALLOW_INSECURE_COOKIES: "true"
+      DEV_USER_EMAIL: ops@salesagent.local
+      DEV_USER_ID: ops
+      AGENT_TOKEN_ENCRYPTION_SECRET: ${CREATIVE_AGENT_TOKEN_SECRET:?set in .env}
+      WORKOS_API_KEY: sk_test_dummy
+      WORKOS_CLIENT_ID: client_dummy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/api/creative-agent/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
   ngrok:
     image: ngrok/ngrok:3.24.0-alpine
     restart: unless-stopped
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?set in .env}
-    command: ["http", "salesagent:8000", "--url", "https://salesagent.ngrok.dev", "--log", "stdout"]
+    command: ["start", "--all", "--config", "/etc/ngrok/ngrok.yml", "--log", "stdout"]
+    volumes:
+      - ./ngrok.yml:/etc/ngrok/ngrok.yml:ro
     depends_on:
       - salesagent
+      - creative-agent
 
 volumes:
   postgres_data:
+  creative_pgdata:

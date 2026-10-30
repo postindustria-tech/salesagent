@@ -1,0 +1,21 @@
+# Token comes from NGROK_AUTHTOKEN in the environment, not this file.
+version: 3
+endpoints:
+  - name: creative-agent
+    url: https://creative-agent.internal
+    upstream:
+      url: http://creative-agent:8080
+  - name: salesagent
+    url: https://salesagent.ngrok.dev
+    upstream:
+      url: http://salesagent:8000
+    traffic_policy:
+      on_http_request:
+        # Only the creative agent's MCP API is public, the sales agent reaches it here over
+        # https (its egress policy refuses http and private addresses).
+        - expressions:
+            - "req.url.path.startsWith('/api/creative-agent')"
+          actions:
+            - type: forward-internal
+              config:
+                url: https://creative-agent.internal
