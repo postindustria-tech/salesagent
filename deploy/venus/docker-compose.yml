@@ -1,0 +1,40 @@
+# Sales agent on venus, exposed through an ngrok tunnel to 127.0.0.1:${SALESAGENT_PORT:-8000}.
+#
+#   cp .env.example .env   # fill in the secrets
+#   docker compose up -d
+#
+# ENCRYPTION_KEY and ADCP_SIGNING_KEK decrypt data already in the database:
+# never regenerate them once the stack has run.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adcp
+      POSTGRES_USER: adcp_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adcp_user -d adcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  salesagent:
+    image: ${SALESAGENT_IMAGE:-ghcr.io/postindustria-tech/salesagent:noetis}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://adcp_user:${POSTGRES_PASSWORD}@postgres:5432/adcp?sslmode=disable
+      ENVIRONMENT: production
+      ADCP_SIGNING_KEY_PASSPHRASE_ENV: ADCP_SIGNING_KEK
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${SALESAGENT_PORT:-8000}:8000"
+
+volumes:
+  postgres_data:
