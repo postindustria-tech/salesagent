@@ -1329,6 +1329,59 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
     return [line.strip() for line in runtime_stage if line.strip().upper().startswith("USER ")]
 
 
+def _dockerfile_instructions(lines: Iterable[str]) -> Iterator[str]:
+    """Logical Dockerfile instructions: comment lines dropped, ``\\`` continuations joined."""
+    parts: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if stripped.endswith("\\"):
+            parts.append(stripped[:-1])
+            continue
+        parts.append(stripped)
+        instruction = " ".join(parts).strip()
+        parts = []
+        if instruction:
+            yield instruction
+    if parts:
+        yield " ".join(parts).strip()
+
+
+_SHELL_SEPARATORS = frozenset({"&&", "||", ";", "|"})
+
+
+def _creates_home(useradd_args: list[str]) -> bool:
+    """``--create-home``, or ``-m`` alone or inside a short-option cluster (``-rm``, ``-mr``)."""
+    return any(
+        arg == "--create-home" or (arg.startswith("-") and not arg.startswith("--") and "m" in arg[1:])
+        for arg in useradd_args
+    )
+
+
+def useradd_commands_without_home(lines: Iterable[str]) -> list[str]:
+    """Instructions that run ``useradd`` without creating a home directory.
+
+    ``useradd -r`` creates none by default, but ``$HOME`` still points at ``/home/<user>``.
+    Libraries that cache under ``~`` (googleads/zeep) then fail with
+    ``[Errno 13] Permission denied: '/home/app'`` and every GAM call breaks.
+    """
+    violations = []
+    for instruction in _dockerfile_instructions(lines):
+        tokens = instruction.split()
+        for index, token in enumerate(tokens):
+            if token != "useradd":
+                continue
+            args = []
+            for arg in tokens[index + 1 :]:
+                if arg in _SHELL_SEPARATORS:
+                    break
+                args.append(arg)
+            if not _creates_home(args):
+                violations.append(instruction)
+    return violations
+
+
 # ---------------------------------------------------------------------------
 # Pre-commit config helpers
 # ---------------------------------------------------------------------------

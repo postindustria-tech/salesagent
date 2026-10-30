@@ -102,7 +102,9 @@ RUN echo "Cache bust: $CACHE_BUST"
 # Non-root runtime user (D34 — issue #1234 PR 5), created before the COPYs below so
 # they can set ownership with --chown. A `chown -R` in a later RUN would rewrite every
 # file into a new layer, storing /app and /opt/venv in the image twice.
-RUN groupadd -r -g 1001 app && useradd -r -u 1001 -g app -s /usr/sbin/nologin app
+# -m: the googleads client caches its WSDLs under ~; with no home directory every GAM
+# call fails with "[Errno 13] Permission denied: '/home/app'".
+RUN groupadd -r -g 1001 app && useradd -r -m -d /home/app -u 1001 -g app -s /usr/sbin/nologin app
 
 # Copy application code
 COPY --chown=app:app . .
