@@ -1,5 +1,4 @@
-# Sales agent on venus, exposed as https://salesagent.ngrok.dev by
-#   ngrok http 8000 --url https://salesagent.ngrok.dev   (NGROK_AUTHTOKEN from the vault: ngrok/authtoken)
+# Sales agent on venus, exposed as https://salesagent.ngrok.dev by the ngrok service below.
 #
 #   cp .env.example .env   # fill in the secrets
 #   docker compose up -d
@@ -36,6 +35,15 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:${SALESAGENT_PORT:-8000}:8000"
+
+  ngrok:
+    image: ngrok/ngrok:3.24.0-alpine
+    restart: unless-stopped
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?set in .env}
+    command: ["http", "salesagent:8000", "--url", "https://salesagent.ngrok.dev", "--log", "stdout"]
+    depends_on:
+      - salesagent
 
 volumes:
   postgres_data:
