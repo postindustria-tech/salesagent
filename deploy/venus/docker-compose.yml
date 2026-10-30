@@ -1,4 +1,5 @@
-# Sales agent on venus, exposed through an ngrok tunnel to 127.0.0.1:${SALESAGENT_PORT:-8000}.
+# Sales agent on venus, exposed as https://salesagent.ngrok.dev by
+#   ngrok http 8000 --url https://salesagent.ngrok.dev   (NGROK_AUTHTOKEN from the vault: ngrok/authtoken)
 #
 #   cp .env.example .env   # fill in the secrets
 #   docker compose up -d
