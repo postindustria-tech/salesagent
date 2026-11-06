@@ -120,6 +120,7 @@ from adcp.types.generated_poc.protocol.get_task_status_request import (
 from adcp.types.generated_poc.protocol.list_tasks_response import Task as LibraryTaskSummary
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.deferred_models import build_deferred_models_or_reraise
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
 from src.core.errors.details import ErrorDetails
 from src.core.exceptions import (
@@ -526,7 +527,14 @@ class WireSerializerMixin:
 
     @model_serializer(mode="wrap")
     def _serialize_wire(self, serializer, info):
-        data = serializer(self)
+        try:
+            data = serializer(self)
+        except TypeError as exception:
+            # A nested adcp class still deferred (src/core/deferred_models.py). Raised here,
+            # pydantic re-wraps it as PydanticSerializationError, so the SDK's own
+            # model_dump recovery never sees it: this seat builds the classes and retries.
+            build_deferred_models_or_reraise(self, exception)
+            data = serializer(self)
         if self._SERIALIZE_NESTED_MODELS:
             data = self._apply_nested_models(data, info)
         return self._apply_always_include(data, info)

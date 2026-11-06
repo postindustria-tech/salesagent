@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.config import get_settings
 from src.core.database.db_config import DatabaseConfig
+from src.core.deferred_models import build_deferred_models_or_reraise
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,17 @@ def _pydantic_json_serializer(obj: Any) -> str:
 
     Registered on create_engine() so all JSONB columns automatically get safe serialization
     without needing mode='json' at every model_dump() call site.
+
+    adcp models build lazily, so a class only ever validated as a nested field still holds
+    pydantic's placeholder serializer, which pydantic-core cannot use. On that one error,
+    build the classes present in ``obj`` and retry: only the classes that reach the database
+    are ever built (see ``src/core/deferred_models.py``).
     """
-    return pydantic_core.to_json(obj, fallback=str).decode()
+    try:
+        return pydantic_core.to_json(obj, fallback=str).decode()
+    except pydantic_core.PydanticSerializationError as exception:
+        build_deferred_models_or_reraise(obj, exception)
+        return pydantic_core.to_json(obj, fallback=str).decode()
 
 
 def _is_pgbouncer_connection(connection_string: str) -> bool:
