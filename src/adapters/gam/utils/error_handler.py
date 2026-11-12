@@ -160,6 +160,12 @@ def map_gam_exception(exception: Exception) -> GAMError:
     error_message = str(exception)
     error_details = {"original_type": type(exception).__name__, "traceback": traceback.format_exc()}
 
+    # A local file the server could not read or write (the googleads cache under ~, a key
+    # file). The builtin PermissionError would otherwise match the permission branch below
+    # and be reported as a GAM authorization failure.
+    if isinstance(exception, OSError) and exception.filename is not None:
+        return GAMConfigurationError(f"Server file access failed (not a GAM error): {error_message}", error_details)
+
     # Map based on exception type and message patterns
     if "AuthError" in type(exception).__name__ or "authentication" in error_message.lower():
         return GAMAuthenticationError(f"GAM authentication failed: {error_message}", error_details)
