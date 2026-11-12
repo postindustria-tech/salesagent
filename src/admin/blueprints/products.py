@@ -599,6 +599,23 @@ def list_products(tenant_id):
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
+# The implementation_config keys GAMProductConfigService derives from delivery_type.
+# Targeting and creative placeholders are the seller's choices and are not among them.
+_GAM_DELIVERY_KEYS = (
+    "line_item_type",
+    "priority",
+    "primary_goal_type",
+    "delivery_rate_type",
+    "creative_rotation_type",
+    "non_guaranteed_automation",
+)
+
+
+def _delivery_type_for(is_fixed: bool) -> str:
+    """A product's delivery type follows its first pricing option: fixed rate is guaranteed."""
+    return "guaranteed" if is_fixed else "non_guaranteed"
+
+
 def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None):
     """Helper to render add product form with optional preserved form data.
 
@@ -802,16 +819,7 @@ def add_product(tenant_id):
                     flash("Product must have at least one pricing option", "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                # Derive delivery_type from first pricing option for implementation_config
-                delivery_type = "guaranteed"  # Default
-
-                if pricing_options_data and len(pricing_options_data) > 0:
-                    first_option = pricing_options_data[0]
-                    # Determine delivery_type based on is_fixed
-                    if first_option.get("is_fixed", True):
-                        delivery_type = "guaranteed"
-                    else:
-                        delivery_type = "non_guaranteed"
+                delivery_type = _delivery_type_for(pricing_options_data[0].get("is_fixed", True))
 
                 # Build implementation config based on adapter type
                 implementation_config = {}
@@ -1601,8 +1609,23 @@ def edit_product(tenant_id, product_id):
                             product.property_ids = None
                             attributes.flag_modified(product, "properties")
 
+                # Parse pricing options first: in automatic mode they decide the delivery type
+                try:
+                    pricing_options_data = parse_pricing_options_from_form(form_data)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+                logger.info(f"Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options")
+
+                # CRITICAL: Products MUST have at least one pricing option
+                if not pricing_options_data or len(pricing_options_data) == 0:
+                    flash("Product must have at least one pricing option", "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
                 # Get pricing based on line item type (GAM form) or delivery type (other adapters)
                 line_item_type = form_data.get("line_item_type")
+                previous_delivery_type = product.delivery_type
 
                 if line_item_type:
                     # GAM form: map line item type to delivery type
@@ -1610,6 +1633,9 @@ def edit_product(tenant_id, product_id):
                         product.delivery_type = "guaranteed"
                     elif line_item_type in ["PRICE_PRIORITY", "HOUSE"]:
                         product.delivery_type = "non_guaranteed"
+                else:
+                    # Automatic mode: the same rule add_product applies
+                    product.delivery_type = _delivery_type_for(pricing_options_data[0].get("is_fixed", True))
 
                 # Update implementation_config with GAM-specific fields
                 # Note: This must run even if line_item_type is not present (automatic mode)
@@ -1619,13 +1645,12 @@ def edit_product(tenant_id, product_id):
                     # Start with existing config to preserve fields not in the form
                     base_config = product.implementation_config.copy() if product.implementation_config else {}
 
-                    # Only regenerate default config if we have line_item_type (explicit mode)
-                    # Otherwise, preserve existing config structure
-                    if line_item_type:
-                        gam_config_service = GAMProductConfigService()
-                        default_config = gam_config_service.generate_default_config(product.delivery_type, formats)
-                        # Merge default config into base_config (preserving other fields)
-                        base_config.update(default_config)
+                    # Re-derive the delivery settings when the line item type is explicit or the
+                    # pricing moved the product between guaranteed and non-guaranteed. Otherwise
+                    # keep what the seller configured (e.g. a tuned priority).
+                    if line_item_type or product.delivery_type != previous_delivery_type:
+                        default_config = GAMProductConfigService.generate_default_config(product.delivery_type)
+                        base_config.update({key: default_config[key] for key in _GAM_DELIVERY_KEYS})
 
                     # Add ad unit/placement targeting if provided
                     ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
@@ -1737,23 +1762,9 @@ def edit_product(tenant_id, product_id):
                         custom_keys = base_config["custom_targeting_keys"]
                         create_custom_key_inventory_mappings(db_session, tenant_id, product_id, custom_keys)
 
-                # Update pricing options (AdCP PR #88)
+                # Update pricing options (AdCP PR #88), parsed above
                 # Note: min_spend is now stored in pricing_options[].min_spend_per_package
                 from decimal import Decimal
-
-                # Parse pricing options from form FIRST
-                try:
-                    pricing_options_data = parse_pricing_options_from_form(form_data)
-                except ValueError as e:
-                    flash(str(e), "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
-
-                logger.info(f"Parsed {len(pricing_options_data) if pricing_options_data else 0} pricing options")
-
-                # CRITICAL: Products MUST have at least one pricing option
-                if not pricing_options_data or len(pricing_options_data) == 0:
-                    flash("Product must have at least one pricing option", "error")
-                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 # Fetch existing pricing options
                 existing_options = list(
@@ -1916,7 +1927,7 @@ def edit_product(tenant_id, product_id):
 
             if pricing_options_list:
                 first_pricing = pricing_options_list[0]
-                delivery_type = "guaranteed" if first_pricing["is_fixed"] else "non_guaranteed"
+                delivery_type = _delivery_type_for(first_pricing["is_fixed"])
                 cpm = first_pricing["rate"]
                 price_guidance = first_pricing["price_guidance"]
 
