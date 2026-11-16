@@ -175,14 +175,14 @@ def init_database():
         "ℹ️  Note: init_db() is safe - it only creates tables (IF NOT EXISTS) and default tenant (if no tenants exist)"
     )
 
-    try:
-        from src.core.database.database import init_db
-
-        init_db(exit_on_error=True)
-        print("✅ Database initialization complete")
-    except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
+    # In a child process, like the migrations: init_db imports the ORM models and with them
+    # every generated adcp schema class (several hundred MB). This launcher lives as long as
+    # the container, so an in-process import would stay resident for no further use.
+    result = subprocess.run([sys.executable, "-m", "src.core.database.database"])
+    if result.returncode != 0:
+        print(f"❌ Database initialization failed (exit code {result.returncode})")
         sys.exit(1)
+    print("✅ Database initialization complete")
 
 
 def cleanup(signum=None, frame=None):

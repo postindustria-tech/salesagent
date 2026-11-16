@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
 from adcp.signing.errors import SignatureVerificationError
-from adcp.types import ErrorCode
+from adcp.types.domains.enums.error_code import ErrorCode
 from pydantic import ValidationError
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
