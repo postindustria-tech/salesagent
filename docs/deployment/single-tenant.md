@@ -215,7 +215,17 @@ docker compose exec postgres pg_isready
 The container stops with exit code 1 when one of its services (the app server, nginx or the
 cron runner) exits on its own or fails to start. A requested stop exits with code 0. Run the
 container with a restart policy, for example `restart: on-failure` in Compose or
-`Restart=on-failure` in a systemd unit, so that a failed service leads to a restart.
+`Restart=on-failure` in a systemd unit, so that a failed service leads to a restart. This
+applies to every deployment of the image, not only to single-tenant mode.
+
+- The cron runner counts on purpose: without its publisher refresh, products stop being
+  offered to buyers a day later.
+- A failure that does not go away, for example a database that stays down, becomes a restart
+  loop. With systemd, set a delay such as `RestartSec=5`, so that quick failures do not reach
+  the unit's start limit and leave it stopped. Docker adds its own growing delay.
+- A requested stop exits with code 0 only when the services end within the runtime's stop
+  timeout. The launcher gives them 8 seconds before it kills them, so keep the timeout at 10
+  seconds or more.
 
 ## Security checklist
 
