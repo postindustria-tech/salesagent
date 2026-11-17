@@ -212,6 +212,11 @@ curl http://localhost:8000/health
 docker compose exec postgres pg_isready
 ```
 
+The container stops with exit code 1 when one of its services (the app server, nginx or the
+cron runner) exits on its own or fails to start. A requested stop exits with code 0. Run the
+container with a restart policy, for example `restart: on-failure` in Compose or
+`Restart=on-failure` in a systemd unit, so that a failed service leads to a restart.
+
 ## Security checklist
 
 - [ ] Use HTTPS in production
