@@ -57,7 +57,7 @@ from types import MappingProxyType
 from typing import Final
 
 from adcp import get_adcp_spec_version
-from adcp.types import ErrorCode
+from adcp.types.domains.enums.error_code import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
 from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
