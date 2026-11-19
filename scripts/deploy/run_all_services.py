@@ -16,11 +16,65 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 from src.core.config import get_settings, load_settings
 
-# Store process references for cleanup
-processes = []
+# The services this launcher started, by name, for supervision and cleanup
+services: dict[str, subprocess.Popen] = {}
+
+# Why a service thread ended with an error: the service never started, or its output could
+# no longer be relayed. A service thread appends here; the supervisor reads it.
+service_failures: list[str] = []
+
+# How long a stop waits for the services before it kills them. Below Docker's default
+# 10-second stop grace, so the launcher still reports its own exit code.
+STOP_GRACE_SECONDS = 8.0
+
+# Set by a stop signal once the services run. The supervisor does the stopping.
+_stop_requested = threading.Event()
+
+
+def register_service(name: str, process: subprocess.Popen) -> None:
+    """Record a started service so the launcher watches it and stops it on exit."""
+    services[name] = process
+
+
+def start_service_thread(name: str, run: Callable[[], None]) -> threading.Thread:
+    """Run a service's start-and-monitor function in a thread, recording its failure.
+
+    A thread that raises ends on its own and takes nothing down with it, so without this a
+    missing binary or a refused configuration leaves the launcher running without the
+    service. ``SystemExit`` is caught too: a ``sys.exit`` in a thread ends only the thread.
+    """
+
+    def guarded() -> None:
+        try:
+            run()
+        except (Exception, SystemExit) as exception:
+            service_failures.append(f"{name} failed: {exception!r}")
+
+    thread = threading.Thread(target=guarded, daemon=True)
+    thread.start()
+    return thread
+
+
+def relay_output(prefix: str, process: subprocess.Popen) -> None:
+    """Print a service's output, line by line, until the service closes it.
+
+    A byte that is not valid UTF-8 is replaced: one bad line in a log must not end the relay,
+    because a service whose output nobody reads blocks once the pipe is full.
+    """
+    assert process.stdout is not None
+    for line in iter(process.stdout.readline, b""):
+        print(f"{prefix} {line.decode(errors='replace').rstrip()}")
+
+
+def run_service(name: str, command: list[str], prefix: str) -> None:
+    """Start a service, put it under supervision, and relay its output until it ends."""
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    register_service(name, process)
+    relay_output(prefix, process)
 
 
 def validate_required_env():
@@ -185,22 +239,84 @@ def init_database():
     print("✅ Database initialization complete")
 
 
-def cleanup(signum=None, frame=None):
-    """Clean up all processes on exit."""
-    print("\nShutting down all services...")
-    for proc in processes:
-        if proc and proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+def stop_services() -> None:
+    """Stop every running service: ask all of them, wait one shared grace period, kill the rest.
+
+    Only the supervisor calls this, never a signal handler: ``Popen.poll`` and ``Popen.wait``
+    take a lock that is not reentrant, so a handler that interrupted one of them and then
+    called them again would wait for ever.
+    """
+    running = [process for process in list(services.values()) if process.poll() is None]
+    for process in running:
+        process.terminate()
+    deadline = time.monotonic() + STOP_GRACE_SECONDS
+    for process in running:
+        try:
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def stop_before_services(signum=None, frame=None):
+    """End the launcher on a stop signal that arrives before any service runs."""
+    print("\nStopped before the services started.")
     sys.exit(0)
 
 
-# Register cleanup handlers
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
+def request_stop(signum=None, frame=None) -> None:
+    """Record a stop signal (SIGINT, SIGTERM). The supervisor stops the services and exits."""
+    _stop_requested.set()
+
+
+def handle_stop_signals(handler: Callable) -> None:
+    """Send SIGINT and SIGTERM to ``handler``."""
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
+
+
+def failed_service() -> str | None:
+    """Which service failed, or ``None`` while every service the launcher was asked to run is running."""
+    if service_failures:
+        return service_failures[0]
+    # A copy: the service threads register nginx and cron while the supervisor runs.
+    for name, process in list(services.items()):
+        exit_code = process.poll()
+        if exit_code is not None:
+            return f"{name} exited with code {exit_code}"
+    return None
+
+
+def supervise_services(seconds: float | None = None, poll_seconds: float = 1.0) -> None:
+    """Watch the services; when one fails, stop the rest and exit with a failure code.
+
+    A container whose app server has died still looks "running" to the container runtime
+    while nginx answers 502 for every request, so the runtime's restart policy never fires.
+    Exiting non-zero hands the decision back to it. Every service counts, cron included:
+    without its publisher refresh, products stop being offered a day later.
+
+    A stop signal (see ``request_stop``) stops the services and exits 0. A failure is looked
+    for first, so a stop that arrives after a service died still exits 1.
+
+    Returns after ``seconds`` when no service failed and no stop was requested; with ``None``
+    it watches until the launcher is stopped.
+    """
+    deadline = None if seconds is None else time.monotonic() + seconds
+    while deadline is None or time.monotonic() < deadline:
+        failure = failed_service()
+        if failure is not None:
+            print(f"❌ {failure}. Stopping the other services.")
+            stop_services()
+            sys.exit(1)
+        if _stop_requested.wait(poll_seconds):
+            print("\nShutting down all services...")
+            stop_services()
+            sys.exit(0)
+
+
+# Until the services run there is nothing to stop: a stop signal ends the launcher at once.
+# Without a handler the signal is ignored when the launcher is PID 1 of a container.
+handle_stop_signals(stop_before_services)
 
 
 def run_migrations():
@@ -233,17 +349,7 @@ def run_mcp_server():
     print("Starting MCP server on port 8080...")
     # nginx proxies to 8080 whatever ADCP_SALES_PORT says, so the port is passed as an
     # argument rather than by rewriting the child's environment.
-    proc = subprocess.Popen(
-        [sys.executable, "scripts/run_server.py", "--port", "8080"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    processes.append(proc)
-
-    # Monitor the process output
-    for line in iter(proc.stdout.readline, b""):
-        if line:
-            print(f"[MCP] {line.decode().rstrip()}")
+    run_service("MCP server", [sys.executable, "scripts/run_server.py", "--port", "8080"], "[MCP]")
     print("MCP server stopped")
 
 
@@ -294,22 +400,10 @@ def run_nginx():
     test_proc = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
     if test_proc.returncode != 0:
         print(f"❌ Nginx configuration test failed: {test_proc.stderr}")
-        return
-    else:
-        print("✅ Nginx configuration test passed")
+        raise RuntimeError("nginx refused its configuration")
+    print("✅ Nginx configuration test passed")
 
-    # Start nginx
-    proc = subprocess.Popen(
-        ["nginx", "-g", "daemon off;"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    processes.append(proc)
-
-    # Monitor the process output
-    for line in iter(proc.stdout.readline, b""):
-        if line:
-            print(f"[Nginx] {line.decode().rstrip()}")
+    run_service("nginx", ["nginx", "-g", "daemon off;"], "[Nginx]")
     print("Nginx stopped")
 
 
@@ -322,17 +416,7 @@ def run_cron():
 
     print("Starting supercronic for scheduled tasks...")
 
-    proc = subprocess.Popen(
-        ["supercronic", crontab_path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    processes.append(proc)
-
-    # Monitor the process output
-    for line in iter(proc.stdout.readline, b""):
-        if line:
-            print(f"[Cron] {line.decode().rstrip()}")
+    run_service("cron", ["supercronic", crontab_path], "[Cron]")
     print("Supercronic stopped")
 
 
@@ -358,33 +442,28 @@ def main():
     # Initialize database
     init_database()
 
-    # Start services in threads
-    threads = []
+    # From here a stop signal is handed to the supervisor, which stops the services.
+    handle_stop_signals(request_stop)
 
+    # Start services in threads
     # MCP Server thread (serves MCP, A2A, and Admin in a single FastAPI process)
-    mcp_thread = threading.Thread(target=run_mcp_server, daemon=True)
-    mcp_thread.start()
-    threads.append(mcp_thread)
+    start_service_thread("MCP server", run_mcp_server)
 
     # A2A and Admin UI are now integrated into the MCP server process (src/app.py)
 
     # Cron thread for scheduled tasks (syncing GAM tenants, etc.)
     runtime = get_settings().runtime
     if not runtime.skip_cron:
-        cron_thread = threading.Thread(target=run_cron, daemon=True)
-        cron_thread.start()
-        threads.append(cron_thread)
+        start_service_thread("cron", run_cron)
 
     # Skipping nginx is useful for docker-compose with separate services
     if not runtime.skip_nginx:
         # Give services more time to start before nginx
         print("⏳ Waiting for backend services to be ready before starting nginx...")
-        time.sleep(10)
+        supervise_services(seconds=10)
 
         # Nginx reverse proxy thread
-        nginx_thread = threading.Thread(target=run_nginx, daemon=True)
-        nginx_thread.start()
-        threads.append(nginx_thread)
+        start_service_thread("nginx", run_nginx)
 
         print("\n✅ All services started with unified routing:")
         print("  - MCP Server: http://localhost:8000/mcp")
@@ -400,13 +479,9 @@ def main():
         print("\nℹ️  Nginx reverse proxy skipped (SKIP_NGINX=true)")
         print("Press Ctrl+C to stop all services")
 
-    # Keep the main thread alive
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n\nShutting down all services...")
-        sys.exit(0)
+    # Runs until the container is stopped (SIGINT or SIGTERM), a service exits, or a service
+    # thread fails.
+    supervise_services()
 
 
 if __name__ == "__main__":
