@@ -9,7 +9,6 @@ Implements security-compliant logging with:
 - Database-based audit trail with optional file backup
 """
 
-import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -19,8 +18,9 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.config import RuntimeSettings
-from src.core.database.database_session import get_db_session
+from src.core.database.database_session import _pydantic_json_serializer, get_db_session
 from src.core.database.models import AuditLog
+from src.core.logging_config import LineSafeFormatter
 
 # Directory holding the FILE BACKUP of the audit trail. The database is the
 # audit authority (see the module docstring); these files are a secondary sink.
@@ -111,11 +111,11 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # Set up file handler for backup
 audit_handler = _LazyDirFileHandler(LOG_DIR / "audit.log", delay=True)
-audit_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
+audit_handler.setFormatter(LineSafeFormatter(LOG_FORMAT, DATE_FORMAT))
 
 # Set up error handler
 error_handler = _LazyDirFileHandler(LOG_DIR / "error.log", delay=True)
-error_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
+error_handler.setFormatter(LineSafeFormatter(LOG_FORMAT, DATE_FORMAT))
 error_handler.setLevel(logging.ERROR)
 
 # Create audit logger
@@ -123,13 +123,7 @@ audit_logger = logging.getLogger("adcp.audit")
 audit_logger.setLevel(logging.INFO)
 audit_logger.addHandler(audit_handler)
 audit_logger.addHandler(error_handler)
-
-# In development, also log to console for debugging
-# In production, the root logger already handles console output with JSON formatting
-if not _runtime.structured_logging:
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
-    audit_logger.addHandler(console_handler)
+# No console handler: records propagate to the root handler, which writes them once.
 
 
 # Budget above (strictly greater than) this value triggers a high-value Slack alert
@@ -157,7 +151,7 @@ def _normalize_audit_details(value: Any) -> Any:
     ``pydantic_core.to_json(fallback=str)``) stringifies a bare Decimal while the
     ``.jsonl`` path emits a number, diverging the two sinks and breaking admin
     readers that format the budget with ``:,.0f`` (#1417). Single source
-    of the money rule (reused by ``_audit_json_default``)."""
+    of the money rule (applied to the ``.jsonl`` lines by ``_audit_jsonl_line``)."""
     if isinstance(value, dict):
         return {k: _normalize_audit_details(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -181,17 +175,15 @@ def _is_high_value_budget(details: dict[str, Any]) -> bool:
     return False
 
 
-def _audit_json_default(value: Any) -> Any:
-    """``json.dumps`` fallback for audit payloads.
+def _audit_jsonl_line(log_entry: dict[str, Any]) -> str:
+    """One ``.jsonl`` line, serialized as the ``AuditLog.details`` column serializes the same payload.
 
-    Safety net for the ``.jsonl`` sink: ``_normalize_audit_details`` already
-    converts Decimals before serialization, but keep the shared Decimal->float
-    rule here too; any other non-serializable leaf falls back to ``str``
-    (#1417).
+    Through the persistence edge's own serializer (the engine's, in database_session.py), so
+    a model an audit payload carries -- an adapter receipt's typed creative, say -- is written
+    as its JSON in the file as it is in the row, never as its ``repr``. The money rule
+    (:func:`_normalize_audit_details`) runs first, as it does ahead of the row (#1417).
     """
-    if isinstance(value, Decimal):
-        return _decimal_to_float(value)
-    return str(value)
+    return _pydantic_json_serializer(_normalize_audit_details(log_entry)) + "\n"
 
 
 class AuditLogger:
@@ -472,7 +464,7 @@ class AuditLogger:
 
         try:
             with open(_log_path("structured.jsonl"), "a") as f:
-                f.write(json.dumps(log_entry, default=_audit_json_default) + "\n")
+                f.write(_audit_jsonl_line(log_entry))
         except Exception as e:
             audit_logger.error(f"Failed to write structured log: {e}")
 
@@ -487,7 +479,7 @@ class AuditLogger:
 
         try:
             with open(_log_path("security.jsonl"), "a") as f:
-                f.write(json.dumps(log_entry, default=_audit_json_default) + "\n")
+                f.write(_audit_jsonl_line(log_entry))
         except Exception as e:
             audit_logger.error(f"Failed to write security log: {e}")
 

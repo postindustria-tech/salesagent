@@ -113,7 +113,7 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
         # Declared, not implemented: this mixin is only composed with IntegrationEnv,
         # which owns the tenant row and the factory session (same convention as
         # EgressHatchMixin._guard).
-        def ensure_tenant(self, **tenant_kwargs: Any) -> Any: ...
+        def ensure_tenant(self, tenant_id: str | None = None, **tenant_kwargs: Any) -> Any: ...
 
         def _commit_factory_data(self) -> None: ...
 
@@ -287,6 +287,17 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
     def serve_hosted_tool(self, tool: str, document: dict[str, Any]) -> None:
         """The tenant's hosted agent answers *tool* with *document* from now on."""
         self.serve_peer_tool(self._require_hosted_key(), tool, document)
+
+    def answer_hosted_previews(self, preview_url: str, dimensions: tuple[int, int]) -> None:
+        """The tenant's hosted agent previews every creative as one render of *preview_url*, sized *dimensions*.
+
+        The pinned single preview (``single_preview_document``) naming that page and size: what
+        a seller that copied a preview onto the creative would copy.
+        """
+        key = self._require_hosted_key()
+        self.serve_hosted_tool(
+            PEER_PREVIEW_TOOL, single_preview_document(key, preview_url=preview_url, dimensions=dimensions)
+        )
 
     def hosted_agent_calls(self, tool: str) -> list[dict[str, Any]]:
         """The arguments of every *tool* call the seller made of its hosted agent, oldest first.

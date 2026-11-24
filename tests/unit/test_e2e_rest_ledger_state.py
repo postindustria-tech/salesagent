@@ -73,6 +73,9 @@ from tests.helpers.ledger import load_ledger_nodeids
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
+        # Added for prebid/salesagent#2645 (approval books line items in database order),
+        # non-strict because it is intermittent.
+        "tests/bdd/test_local_gam_line_item_goal.py::test_a_buy_the_seller_approves_books_each_packages_budget_at_the_price_of_the_option_it_selected[e2e_rest]",
         # salesagent-3cs7o.54 GRADUATED. The entry read "asset-level provenance absent
         # from the stored creative over e2e_rest only ... every source-readable hop is
         # cleared by measurement; the next step is a live-stack probe". The probe was
@@ -359,7 +362,7 @@ def find_webhook_internal_tags(tree: ast.Module) -> frozenset[str]:
 
 def test_webhook_internal_tags_match_pin() -> None:
     """The conftest's UC-004 webhook xfail tag set is exactly the pinned set."""
-    actual = find_webhook_internal_tags(ast.parse(_BDD_CONFTEST.read_text()))
+    actual = find_webhook_internal_tags(ast.parse(_BDD_CONFTEST.read_text(encoding="utf-8")))
     added = actual - EXPECTED_WEBHOOK_INTERNAL_TAGS
     removed = EXPECTED_WEBHOOK_INTERNAL_TAGS - actual
     assert actual == EXPECTED_WEBHOOK_INTERNAL_TAGS, (

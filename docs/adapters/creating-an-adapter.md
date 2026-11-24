@@ -28,8 +28,9 @@ identity and capabilities as class attributes:
 
 The base constructor takes `(config, principal, creative_engine, tenant_id)`
 and requires `tenant_id` — every adapter operation is tenant-scoped
-(`src/adapters/base.py:339-345`). There is no `dry_run` parameter: a preview is
-a unit of work that rolls back rather than an adapter mode, as
+(`AdServerAdapter.__init__` in `src/adapters/base.py`). There is no `dry_run`
+parameter: a preview is a unit of work that rolls back rather than an adapter
+mode, as
 [Rules that bind every adapter](#rules-that-bind-every-adapter) restates.
 Validate required configuration in your `__init__` with
 `self._require_config(...)`, which raises `AdCPConfigurationError` with the
@@ -51,12 +52,17 @@ class MyPlatformAdapter(AdServerAdapter):
 `AdServerAdapter` declares six abstract methods. An adapter must implement all
 of them:
 
-- `create_media_buy(request, packages, start_time, end_time, package_pricing_info)`
+- `create_media_buy(request, packages, start_time, end_time, package_pricing_info, *, creatives_by_package=None)`
   — creates orders or campaigns on the ad server from the selected packages.
   It takes an `AdapterCreateRequest` (the buy to place, never the buyer's
-  request DTO) and returns an `AdapterCreateResult`.
+  request DTO) and returns an `AdapterCreateResult`. `creatives_by_package` is
+  the value `validate_media_buy_request` was handed: each package's creatives as
+  core read them (`CreativesByPackage`).
 - `add_creative_assets(media_buy_id, assets, today)` — uploads creative
-  assets to an existing media buy, returning `list[AssetStatus]`.
+  assets to an existing media buy, returning `list[AssetStatus]`. Each asset
+  carries the creative core read for it under `creative` (`CreativeToTraffic`,
+  `src/core/traffic_carrier.py`); an adapter derives what it serves from that
+  carrier.
 - `associate_creatives(line_item_ids, platform_creative_ids)` — associates
   already-uploaded creatives with line items, used when the buyer supplies
   `creative_ids` in a create request.
@@ -130,16 +136,12 @@ An adapter participates in two ways:
    is the most complete example, including custom-targeting key and value
    resolution.
 
-## Optional: Provide a configuration UI
+## Optional: Validate product configuration
 
-An adapter can ship its own admin configuration pages:
-
-- `get_config_ui_endpoint()` — returns the endpoint path for the adapter's
-  configuration UI, or `None` when the adapter has none.
-- `register_ui_routes(app)` — registers Flask routes for those pages during
-  app initialization.
-- `validate_product_config(config)` — validates adapter-specific product
-  configuration and returns `(is_valid, error_message)`.
+`validate_product_config(config)` validates adapter-specific product
+configuration and returns `(is_valid, error_message)`. An adapter's admin
+configuration page is a route in an admin blueprint, like the mock adapter's
+in `src/admin/blueprints/adapters.py`.
 
 ## Rules that bind every adapter
 

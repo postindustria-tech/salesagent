@@ -6,31 +6,35 @@ from src.admin.utils.audit_decorator import log_admin_action
 # Export all helper functions
 from src.admin.utils.helpers import (
     LimitedResult,
+    approval_refusal,
     approve_media_buy_through_writer,
+    describe_approval_error,
     execute_limited,
     get_custom_targeting_mappings,
     get_tenant_config_from_db,
     is_admin_production,
     is_super_admin,
-    is_tenant_admin,
     parse_json_config,
     require_auth,
     require_tenant_access,
+    tenant_access_refusal,
     translate_custom_targeting,
     validate_gam_network_response,
     validate_gam_user_response,
 )
 
 __all__ = [
+    "approval_refusal",
     "approve_media_buy_through_writer",
+    "describe_approval_error",
     # Decorator
     "log_admin_action",
     # Auth/authorization functions
     "is_admin_production",
     "is_super_admin",
-    "is_tenant_admin",
     "require_auth",
     "require_tenant_access",
+    "tenant_access_refusal",
     # Utility functions
     "parse_json_config",
     "get_tenant_config_from_db",

@@ -24,7 +24,7 @@ import os
 import re
 import ssl
 from collections.abc import Callable, Generator, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
@@ -35,6 +35,7 @@ from scripts.audit import storyboard_spec
 from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
+from tests.utils.database_helpers import production_db_pointed_at
 
 # ``src.app`` reads this when it is imported and mounts GET /tls/ask from it, as a deployment
 # does. local-tls-ask.feature grades that composed app, so it is set before anything imports
@@ -79,6 +80,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_v31_request",
     "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
     "tests.bdd.steps.domain.uc002_invariants",
+    "tests.bdd.steps.domain.uc002_creative_kind",
     "tests.bdd.steps.domain.gam_seller",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
@@ -100,7 +102,13 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.admin_operator_refusals",
+    "tests.bdd.steps.domain.admin_super_admin",
+    "tests.bdd.steps.domain.admin_unexpected_errors",
+    "tests.bdd.steps.domain.admin_tenant_scoping",
+    "tests.bdd.steps.domain.admin_workflow_step_review",
     "tests.bdd.steps.domain.admin_inventory_profiles",
+    "tests.bdd.steps.domain.admin_signing_keys",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_publisher_domain",
@@ -122,6 +130,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.database_fail_fast",
+    "tests.bdd.steps.domain.local_media_buy_status_sweep",
     "tests.bdd.steps.domain.tls_ask",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
@@ -200,7 +209,7 @@ def _dormant_baseline() -> frozenset[tuple[str, str]]:
     count.
     """
     entries = set()
-    for line in DORMANT_SCENARIOS_PATH.read_text().splitlines():
+    for line in DORMANT_SCENARIOS_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or " :: " not in line:
             continue
@@ -399,7 +408,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
     seen: set[str] = set()
     for feature_file in features_dir.glob("**/*.feature"):
-        text = feature_file.read_text()
+        text = feature_file.read_text(encoding="utf-8")
         for match in re.finditer(r"@([\w.\-]+)", text):
             tag = match.group(1)
             if tag not in seen:
@@ -3108,8 +3117,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # new failure is a LIBRARY-REFERENCE row — assignments_only,
             # assignment_with_weight_zero, assignment_with_placement_targeting, "assignment
             # cr-001", weight=0, weight=100. The cause is symmetrical to the one above: those
-            # rows seed their creative through given_media_buy._create_approved_creative,
-            # whose default fmt is the BARE id, so moving only the product inverts the
+            # rows seeded their creative through given_media_buy._create_approved_creative (now
+            # _creative_seeding.store_package_creative), whose default fmt was then the BARE id,
+            # so moving only the product inverts the
             # product-vs-creative compatibility check for every one of them.
             #
             # THOSE SIX ROW LABELS ARE EXACTLY THE SIX THAT FAIL ON e2e_rest, which nobody
@@ -5744,8 +5754,6 @@ def e2e_stack():
     server_host = os.environ.get("E2E_SERVER_HOST")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
-        import re
-
         # Server containers are named "<project>-server-gwN" (globally-unique so
         # parallel worktrees don't collide) and reachable by that name on the
         # compose network. Hit the server directly on :8080 (SKIP_NGINX).
@@ -6058,39 +6066,6 @@ def _build_uc003_storyboard_generic_client_env(e2e_config: object | None) -> Abs
     return BareIntegrationEnv(e2e_config=e2e_config)
 
 
-def _build_admin_env(e2e_config: object | None) -> AbstractContextManager:
-    """Both transports BR-ADMIN-ACCOUNTS.feature declares, chosen at collection.
-
-    ``pytest_generate_tests`` parametrizes ADMIN scenarios over
-    ``AdminTransport.INTEGRATION`` plus ``AdminTransport.E2E`` (when
-    ``BDD_E2E_ENABLED=true``), and the ``ctx`` fixture stashes ``e2e_config``
-    for the ``e2e_``-prefixed one. ADMIN is never parametrized under ``e2e_rest``,
-    but ``AdminTransport.E2E`` (``"e2e_admin"``) DOES carry the ``e2e_`` prefix the
-    ``ctx`` fixture keys on, so ``e2e_config`` is not always ``None`` here: pinning
-    ``mode="integration"`` would run the Flask test_client while the node id claims
-    the live stack, silently grading 13 scenarios on one transport. The env is TOLD
-    its transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
-    it discovers neither.
-
-    This is the ONE builder that passes ``base_url=`` instead of
-    ``e2e_config=``, and the asymmetry is deliberate: the admin UI is an HTML
-    form surface, not an AdCP tool surface, so the env needs the ADDRESS and
-    nothing else from ``E2EConfig``. Handing it the whole object would pull an
-    AdCP-shaped dependency into a surface that has no AdCP protocol — the same
-    reason ``AdminTransport`` is not a member of the ``Transport`` enum (see its
-    docstring). A census asking "does every builder here receive e2e_config?"
-    will flag this line; that flag is expected. What actually must hold — no
-    branch pins its own DB scope — is machine-checked by
-    ``tests/unit/test_bdd_admin_transport_parametrization.py``
-    ``::test_harness_env_never_pins_its_db_scope``, not by that heuristic.
-    """
-    from tests.harness.admin_accounts import AdminAccountEnv
-
-    mode = "e2e" if e2e_config is not None else "integration"
-    base_url = e2e_config.base_url if e2e_config is not None else None  # type: ignore[attr-defined]
-    return AdminAccountEnv(mode=mode, base_url=base_url)
-
-
 def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     """Shared by COMPAT and UC-GET-PRODUCTS — both are read-only product listing."""
     from tests.harness.product import ProductEnv
@@ -6109,6 +6084,17 @@ def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractCon
     from tests.harness.admin_inventory_profile import AdminInventoryProfileEnv
 
     return AdminInventoryProfileEnv(e2e_config=e2e_config)
+
+
+def _build_admin_signing_keys_env(e2e_config: object | None) -> AbstractContextManager:
+    """A tenant with one signing key in a seeded state, and the operator's two pages (#2288).
+
+    The admin requests follow the env's own transport: in process without ``e2e_config``,
+    over the live stack with it.
+    """
+    from tests.harness.admin_signing_keys import AdminSigningKeysEnv
+
+    return AdminSigningKeysEnv(e2e_config=e2e_config)
 
 
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
@@ -6339,15 +6325,56 @@ def _seed_delivery_poll(ctx: dict, env: object) -> None:
     ctx[f"db_principal_{env._principal_id}"] = principal
 
 
+def _harness_class(factory_path: str) -> Callable[..., AbstractContextManager]:
+    """The harness class at dotted *factory_path*, imported when a builder runs rather than with this conftest."""
+    import importlib
+
+    module_name, _, class_name = factory_path.rpartition(".")
+    return getattr(importlib.import_module(module_name), class_name)
+
+
 def _env(factory_path: str, **kwargs: object) -> Callable[[object | None], AbstractContextManager]:
     """Build an env_builder that imports its harness lazily, as the branches did."""
 
     def _builder(e2e_config: object | None) -> AbstractContextManager:
-        import importlib
+        return _harness_class(factory_path)(e2e_config=e2e_config, **kwargs)
 
-        module_name, _, class_name = factory_path.rpartition(".")
-        env_cls = getattr(importlib.import_module(module_name), class_name)
-        return env_cls(e2e_config=e2e_config, **kwargs)
+    return _builder
+
+
+def _admin_env_builder(factory_path: str) -> Callable[[object | None], AbstractContextManager]:
+    """Build the env_builder of an ``AdminAccountEnv`` subclass, on the transport chosen at collection.
+
+    ``pytest_generate_tests`` parametrizes a ``T-ADMIN-`` scenario over
+    ``AdminTransport.INTEGRATION`` plus ``AdminTransport.E2E`` (when
+    ``BDD_E2E_ENABLED=true``), and the ``ctx`` fixture stashes ``e2e_config``
+    for the ``e2e_``-prefixed one. ADMIN is never parametrized under ``e2e_rest``,
+    but ``AdminTransport.E2E`` (``"e2e_admin"``) DOES carry the ``e2e_`` prefix the
+    ``ctx`` fixture keys on, so ``e2e_config`` is not always ``None`` here: pinning
+    ``mode="integration"`` would run the Flask test_client while the node id claims
+    the live stack, silently grading the scenario on one transport. The env is TOLD
+    its transport and, over e2e, the per-worker address ``e2e_stack`` synthesised —
+    it discovers neither.
+
+    These builders are the only ones that pass ``base_url=`` instead of
+    ``e2e_config=``, and the asymmetry is deliberate: the admin UI is an HTML form
+    surface, not an AdCP tool surface, so the env needs the ADDRESS and nothing
+    else from ``E2EConfig``. Handing it the whole object would pull an AdCP-shaped
+    dependency into a surface that has no AdCP protocol — the same reason
+    ``AdminTransport`` is not a member of the ``Transport`` enum (see its
+    docstring). A census asking "does every builder here receive e2e_config?"
+    will flag this one; that flag is expected. What actually must hold — no
+    branch pins its own DB scope — is machine-checked by
+    ``tests/unit/test_bdd_admin_transport_parametrization.py``
+    ``::test_harness_env_never_pins_its_db_scope``, not by that heuristic. Over e2e
+    ``_run_env_route`` has already entered ``_db_scope_for``, so the env's factory
+    writes land in the server's database.
+    """
+
+    def _builder(e2e_config: object | None) -> AbstractContextManager:
+        mode = "e2e" if e2e_config is not None else "integration"
+        base_url = e2e_config.base_url if e2e_config is not None else None  # type: ignore[attr-defined]
+        return _harness_class(factory_path)(mode=mode, base_url=base_url)
 
     return _builder
 
@@ -6360,36 +6387,6 @@ def _uc(uc_name: str, predicate: Callable[[frozenset[str]], bool]) -> Callable[[
     ``BR-RULE-034`` are both carried by more than one use case).
     """
     return lambda markers: storyboard_spec.detect_uc(markers) == uc_name and predicate(markers)
-
-
-@contextmanager
-def _production_db_pointed_at(url: str) -> Generator[None, None, None]:
-    """Point production's cached DB engine at ``url`` for the scenario duration.
-
-    The e2e counterpart of ``integration_db``'s engine repoint: over e2e_rest
-    the env's factories write to the live server DB (``e2e_config.postgres_url``),
-    but the runner's ``DATABASE_URL`` targets the in-process test base (in-network:
-    ``.../adcp_test``), so any in-process production call inside an e2e scenario
-    (e.g. a TRANSPORT-BYPASS Given calling an ``_impl``) would read a different
-    database than the one being seeded. Repoint DATABASE_URL + reset the cached
-    engine on entry, restore both on exit (mirrors tests/conftest_db.py).
-    """
-    import src.core.context_manager as _context_manager_module
-    from src.core.database.database_session import reset_engine
-
-    original_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = url
-    reset_engine()
-    _context_manager_module._context_manager_instance = None
-    try:
-        yield
-    finally:
-        if original_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = original_url
-        reset_engine()
-        _context_manager_module._context_manager_instance = None
 
 
 def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> AbstractContextManager[None]:
@@ -6406,7 +6403,7 @@ def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> 
     if e2e_config is None:
         request.getfixturevalue("integration_db")
         return nullcontext()
-    return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
+    return production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
 
 
 def _run_env_route(
@@ -6457,12 +6454,12 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     ),
     # The seven rows below are keyed by the coarse `uc` bucket (from
     # storyboard_spec.detect_uc), not a per-scenario tag: they are what a scenario in these
-    # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-001, UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env
-    # + one seed serves every scenario. UC-019 does have one (@post-create-poll
-    # needs create + list in a single scenario), so its bucket row is the
-    # remainder.
-    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
+    # UCs falls back to when no predicate row above claims it. COMPAT, UC-001,
+    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
+    # seed serves every scenario. ADMIN has one (T-ADMIN-SCOPE-* takes its own
+    # harness) and UC-019 has one (@post-create-poll needs create + list in a
+    # single scenario), so their bucket rows are the remainder.
+    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_admin_env_builder("tests.harness.admin_accounts.AdminAccountEnv")),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     # UC-001 is get_products discovery, so it takes the SAME env as
     # UC-GET-PRODUCTS. It had no row at all until now, which meant a
@@ -6651,6 +6648,8 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # delete_missing and active delivery: plain syncs CreativeSyncEnv serves on every transport.
         "T-UC-006-local-delete-missing-active-delivery",
         "T-UC-006-local-delete-missing-not-delivering",
+        # A creative agent's preview stays out of the stored creative: plain syncs, create and update.
+        "T-UC-006-local-preview-kept-out-of-creative",
         # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
         # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
         # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
@@ -6762,6 +6761,23 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    # ── ADMIN (hand-authored admin UI features) ─────────────────────────────
+    # T-ADMIN-* detects as the ADMIN bucket (storyboard_spec.detect_uc); the
+    # bucket row serves BR-ADMIN-ACCOUNTS. BR-ADMIN-TENANT-SCOPING carries the
+    # narrower T-ADMIN-SCOPE- prefix and needs its own harness, so it is claimed
+    # here, ahead of the bucket, by predicate.
+    EnvRoute(
+        tag="admin-tenant-scoping",
+        when=lambda m: any(t.startswith("T-ADMIN-SCOPE-") for t in m),
+        env_builder=_admin_env_builder("tests.harness.admin_tenant_scoping.AdminTenantScopingEnv"),
+    ),
+    # BR-ADMIN-WORKFLOW-STEP-REVIEW (GHSA-2968-2px9-6rjm) carries T-ADMIN-STEPREVIEW- and
+    # seeds a workflow step besides the target tenant, so it is claimed here the same way.
+    EnvRoute(
+        tag="admin-workflow-step-review",
+        when=lambda m: any(t.startswith("T-ADMIN-STEPREVIEW-") for t in m),
+        env_builder=_admin_env_builder("tests.harness.admin_workflow_step_review.AdminWorkflowStepReviewEnv"),
+    ),
     # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
     # Same reason the @egress rows below are UNSCOPED `when` rows: these
     # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so
@@ -7029,6 +7045,15 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_admin_inventory_profile_env,
     ),
     EnvRoute(
+        tag="admin-signing-keys",
+        # BR-ADMIN-SIGNING-KEYS (#2288): the signing-keys page and the setup checklist for a
+        # key in each seeded state. Its T-ADMIN- tags parametrize it over the admin
+        # transports, and this row claims it before the ADMIN bucket, whose AdminAccountEnv
+        # has no factories.
+        when=lambda m: "admin_signing_keys" in m,
+        env_builder=_build_admin_signing_keys_env,
+    ),
+    EnvRoute(
         tag="get-products-format-options",
         # BR-UC-GET-PRODUCTS format-option announcement: stores real products.format_options
         # documents and reads them back off get_products, so it takes the UC-GET-PRODUCTS
@@ -7177,6 +7202,14 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_product_env,
     ),
     EnvRoute(
+        tag="media-buy-status-sweep",
+        # The status sweep runs in the test process. get_media_buys is the read a buyer
+        # makes, so the scenario takes the UC-019 list env and crosses transports there.
+        when=lambda m: any(t.startswith("T-SWEEP") for t in m),
+        env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    EnvRoute(
         tag="protocol-version-negotiation",
         # BR-PROTOCOL-001 grades that the BOUNDARY refuses a version pin this seller cannot
         # serve, on a tool that is not get_adcp_capabilities — the tool whose own negotiation
@@ -7256,6 +7289,9 @@ ENV_ROUTES: list[EnvRoute] = [
                 # request the Givens built. The row claims that feature's tag prefix once, so
                 # a new GAM scenario joins it without editing this predicate.
                 or any(t.startswith("T-UC-002-local-gam-") for t in m)
+                # local-uc002-creative-kind-reaches-adapter.feature, for the same reason:
+                # the create chain and the create dispatch, claimed by its tag prefix once.
+                or any(t.startswith("T-UC-002-local-creative-kind-") for t in m)
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),

@@ -26,7 +26,6 @@ from src.core.errors.details import (
     EntityRefDetails,
     ErrorProblem,
     RejectionReasonDetails,
-    ValidationDetails,
 )
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -50,6 +49,7 @@ from src.core.schemas import (
     Snapshot,
 )
 from src.core.security.webhook_egress import deliver_webhook
+from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 from src.services.ai.config import SellerAIConfig
 
@@ -217,6 +217,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage,
     ) -> list[ErrorProblem]:
         """Validate media buy request with GAM-like validation rules.
 
@@ -226,7 +228,9 @@ class MockAdServer(AdServerAdapter):
         (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
         sentence coming from CODE_TABLE.
         """
-        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        problems = super().validate_media_buy_request(
+            request, packages, start_time, end_time, package_pricing_info, creatives_by_package=creatives_by_package
+        )
 
         # Date validation (like GAM)
         if start_time >= end_time:
@@ -386,7 +390,6 @@ class MockAdServer(AdServerAdapter):
             AdCPAdapterError,
             AdCPConfigurationError,
             AdCPRateLimitError,
-            AdCPValidationError,
         )
 
         # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
@@ -641,6 +644,8 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        *,
+        creatives_by_package: CreativesByPackage | None = None,
     ) -> AdapterCreateResult:
         """Simulates the creation of a media buy using GAM-like templates.
 
@@ -770,13 +775,6 @@ class MockAdServer(AdServerAdapter):
                             capability="keywords_any_of", rejected_value=targeting.keywords_any_of
                         )
                     )
-
-        # GAM-like validation (based on real GAM behavior)
-        validation_errors = self.validate_media_buy_request(
-            request, packages, start_time, end_time, package_pricing_info
-        )
-        if validation_errors:
-            raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -972,7 +970,7 @@ class MockAdServer(AdServerAdapter):
         return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Simulates adding creatives with HITL support."""
 
@@ -991,7 +989,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, assets, today)
 
     def _add_creative_assets_async(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in async HITL mode."""
         self.log("🤖 Processing add_creative_assets in ASYNC mode")
@@ -1042,7 +1040,7 @@ class MockAdServer(AdServerAdapter):
         return results
 
     def _add_creative_assets_sync_with_delay(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing add_creative_assets in SYNC mode ({self.sync_delay_ms}ms delay)")
@@ -1093,7 +1091,7 @@ class MockAdServer(AdServerAdapter):
         return self._add_creative_assets_immediate(media_buy_id, approved_assets, today)
 
     def _add_creative_assets_immediate(
-        self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
+        self, media_buy_id: str, assets: list[AdapterCreativeAsset], today: datetime
     ) -> list[AssetStatus]:
         """Add creative assets immediately (original behavior)."""
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
@@ -1549,98 +1547,6 @@ class MockAdServer(AdServerAdapter):
                     )
                 ],
             )
-
-    def get_config_ui_endpoint(self) -> str | None:
-        """Return the URL path for the mock adapter's configuration UI."""
-        return "/adapters/mock/config"
-
-    def register_ui_routes(self, app):
-        """Register Flask routes for the mock adapter configuration UI."""
-
-        from flask import render_template, request
-
-        @app.route("/adapters/mock/config/<tenant_id>/<product_id>", methods=["GET", "POST"])
-        def mock_product_config(tenant_id, product_id):
-            # Import here to avoid circular imports
-            from functools import wraps
-
-            from src.admin.utils import require_auth
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Product
-
-            # Apply auth decorator manually
-            @require_auth()
-            @wraps(mock_product_config)
-            def wrapped_view():
-                from sqlalchemy import select
-
-                with get_db_session() as session:
-                    # Get product details
-                    stmt = select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)
-                    product_obj = session.scalars(stmt).first()
-
-                    if not product_obj:
-                        return "Product not found", 404
-
-                    product = {"product_id": product_id, "name": product_obj.name}
-
-                    # Get current config
-                    config = product_obj.implementation_config or {}
-
-                    if request.method == "POST":
-                        # Update configuration
-                        new_config = {
-                            "daily_impressions": int(request.form.get("daily_impressions", 100000)),
-                            "fill_rate": float(request.form.get("fill_rate", 85)),
-                            "ctr": float(request.form.get("ctr", 0.5)),
-                            "viewability_rate": float(request.form.get("viewability_rate", 70)),
-                            "latency_ms": int(request.form.get("latency_ms", 50)),
-                            "error_rate": float(request.form.get("error_rate", 0.1)),
-                            "test_mode": request.form.get("test_mode", "normal"),
-                            "price_variance": float(request.form.get("price_variance", 10)),
-                            "seasonal_factor": float(request.form.get("seasonal_factor", 1.0)),
-                            "verbose_logging": "verbose_logging" in request.form,
-                            "predictable_ids": "predictable_ids" in request.form,
-                            "delivery_simulation": {
-                                "enabled": "delivery_simulation_enabled" in request.form,
-                                "time_acceleration": int(request.form.get("time_acceleration", 3600)),
-                                "update_interval_seconds": float(request.form.get("update_interval_seconds", 1.0)),
-                            },
-                        }
-
-                        # Validate the configuration
-                        validation_errors = self.validate_product_config(new_config)
-                        if validation_errors:
-                            return render_template(
-                                "adapters/mock_product_config.html",
-                                tenant_id=tenant_id,
-                                product=product,
-                                config=config,
-                                error=validation_errors[0],
-                            )
-
-                        # Save to database
-                        product_obj.implementation_config = new_config
-                        session.commit()
-
-                        return render_template(
-                            "adapters/mock_product_config.html",
-                            tenant_id=tenant_id,
-                            product=product,
-                            config=new_config,
-                            success=True,
-                        )
-
-                    # Formats are not authored here: the product form authors the canonical
-                    # format_options, and format_ids is derived from them.
-                    return render_template(
-                        "adapters/mock_product_config.html",
-                        tenant_id=tenant_id,
-                        product=product,
-                        config=config,
-                    )
-
-            return wrapped_view()
 
     def validate_product_config(self, config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate mock adapter configuration."""

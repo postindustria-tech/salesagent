@@ -28,7 +28,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import iter_call_expressions, rel
 
 # Per-file cap on hand-rolled mock constructions in behavioral test files.
 # Frozen at the current count; can only shrink. New behavioral files with mock
@@ -41,7 +41,7 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     # answers every unstubbed attribute with a truthy child, so it graded the mock.
     # 26 -> 20: the six tests of ``_validate_and_convert_format_ids`` deleted with it. No
     # production path called it; the package format selector gate refuses those references.
-    "tests/integration/test_create_media_buy_behavioral.py": 20,
+    "tests/integration/test_create_media_buy_behavioral.py": 17,
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).
@@ -64,7 +64,7 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     # ``stub_package_row``, which derives the attribute set from
     # ``MediaPackage.__table__.columns`` instead of setting the two attributes each site
     # happened to need.
-    "tests/unit/test_update_media_buy_behavioral.py": 75,
+    "tests/unit/test_update_media_buy_behavioral.py": 64,
 }
 
 # unittest.mock construction callables counted as hand-rolled mocking.
@@ -87,7 +87,7 @@ def _count_mock_constructions(filepath: Path) -> list[int]:
     if not _is_behavioral_test_file(filepath):
         return []
     try:
-        tree = ast.parse(filepath.read_text(), filename=str(filepath))
+        tree = ast.parse(filepath.read_text(encoding="utf-8"), filename=str(filepath))
     except (OSError, SyntaxError):
         return []
     lines: list[int] = []
@@ -105,7 +105,7 @@ _SCAN_DIRS = [_REPO_ROOT / "tests"]
 
 
 def _rel(path: Path) -> str:
-    return str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
+    return rel(path, _REPO_ROOT).replace("\\", "/")
 
 
 from tests.unit._per_file_cap_guard import (
