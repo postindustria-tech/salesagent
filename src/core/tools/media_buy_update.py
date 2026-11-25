@@ -60,6 +60,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.media_buy import stored_package_of
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
@@ -71,7 +72,7 @@ from src.core.errors.details import (
     InvalidStateDetails,
     ValidationDetails,
 )
-from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.adapter_helpers import build_adapter
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
     AdCPPackageUpdate,
@@ -84,6 +85,7 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
+from src.core.stored_package import StoredPackage
 from src.core.tools.creatives import sync_creatives
 from src.core.tools.creatives._assignments import assignments_by_package, require_package_covered
 from src.core.tools.financial_validation import (
@@ -272,7 +274,7 @@ def _affected_package(
     # ``_package_product``), so by here a package they touched has one.
     stored = uow.media_buys.get_package(media_buy_id, package_id)
     config = (stored.package_config or {}) if stored is not None else {}
-    stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
+    projected = stored_package_of(stored) if stored is not None else None
     stored_bid_price = float(stored.bid_price) if stored is not None and stored.bid_price is not None else None
     assert uow.assignments is not None
     assignments = assignments_by_package(uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)).get(
@@ -280,13 +282,13 @@ def _affected_package(
     )
     return AffectedPackage(
         package_id=package_id,
-        paused=bool(config.get("paused", False)) if changes.paused is None else changes.paused,
-        budget=stored_budget if changes.budget is None else changes.budget,
+        paused=(projected.paused if projected is not None else False) if changes.paused is None else changes.paused,
+        budget=(projected.budget if projected is not None else None) if changes.budget is None else changes.budget,
         bid_price=stored_bid_price,
         # Re-read rather than carried: ``update_package_fields`` writes the column inside
         # THIS session, so the row already answers with what this update applied.
         pacing=stored.pacing if stored is not None else None,
-        product_id=config.get("product_id"),
+        product_id=projected.product_id if projected is not None else None,
         pricing_option_id=config.get("pricing_option_id"),
         creative_assignments=assignments,
         # Written by create_media_buy from the validated request and by the catalogs branch
@@ -539,6 +541,17 @@ def _patched_overlay(package: MediaPackage | None, overlay: TargetingInput) -> T
     stored = (package.package_config.get("targeting_overlay") or {}) if package is not None else {}
     kept = {name: value for name, value in stored.items() if value is not None}
     return TargetingInput.model_validate(kept | {name: getattr(overlay, name) for name in overlay.model_fields_set})
+
+
+def _stored_packages(uow: "MediaBuyUoW", media_buy_id: str) -> list[StoredPackage]:
+    """Every package of the buy as this request's unit of work holds it, for the adapter.
+
+    Read before each adapter call rather than once, so a call sees the writes the request
+    made before it. The adapter takes them instead of reading the rows itself: a session of
+    its own, opened inside this unit, would close the unit's session (#1644, #2647).
+    """
+    assert uow.media_buys is not None
+    return uow.media_buys.get_stored_packages(media_buy_id)
 
 
 def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str, pkg_index: int) -> "DBProduct | None":
@@ -1025,7 +1038,14 @@ def _update_media_buy_impl(
 
             principal = identity.principal
 
-            adapter = get_adapter(identity)
+            # The config row is read on this unit's session. get_adapter would read it in a
+            # session of its own, and the first get_db_session() inside an open unit closes the
+            # unit's session: the revision lock _refuse_stale_revision took would go with it,
+            # before any write it guards (#1644, #2647). The lock then holds until the writes,
+            # except on the thread whose cached ContextManager session is the unit's session:
+            # get_or_create_context and create_workflow_step above commit and close it (#2682).
+            assert uow.adapter_configs is not None
+            adapter = build_adapter(identity, uow.adapter_configs.find_by_tenant())
             today = date.today()
 
             # spec (core/product.json `property_targeting_allowed`): reject property_list targeting
@@ -1609,6 +1629,17 @@ def _update_media_buy_impl(
                             package_id=pkg_update.package_id,
                             budget=None,
                             today=utc_flight_start(today),
+                            packages=_stored_packages(uow, req.media_buy_id),
+                        )
+
+                        # The seller's record of the pause, written here inside this unit of
+                        # work once the ad server has accepted it, as the budget below is:
+                        # get_media_buys serves package_config["paused"], and the write rolls
+                        # back with a later refusal of the same request. The mock used to
+                        # commit it in a session of its own, which survived that refusal, and
+                        # GAM, Kevel and Triton recorded no pause at all (#2647).
+                        uow.media_buys.set_package_config_keys(
+                            req.media_buy_id, pkg_update.package_id, paused=pkg_update.paused
                         )
 
                         # This branch modified a package, so the response says which one
@@ -1634,22 +1665,19 @@ def _update_media_buy_impl(
                             package_id=pkg_update.package_id,
                             budget=int(budget_amount),
                             today=utc_flight_start(today),
+                            packages=_stored_packages(uow, req.media_buy_id),
                         )
 
                         # The seller's budget column is written HERE, inside this request's
                         # unit of work, once the ad server has accepted the change, and
-                        # nowhere else: no adapter writes media_packages.budget. It was left
-                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
-                        # Broadstreet wrote only package_config["budget"] while get_media_buys
-                        # reads the column, and the mock wrote both in its own session. Pinned
+                        # nowhere else: no adapter writes a package's record (#2647). Pinned
                         # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
                         # in which no package field from a rejected update may change, and
                         # "every mutating update increments revision": update_package_fields
                         # writes the column and moves the revision, and both roll back with
-                        # the UoW. The UoW owns only that: the adapter call above has already
-                        # reached the ad server when a later branch refuses, and GAM and
-                        # Broadstreet still commit package_config["budget"] in their own
-                        # sessions.
+                        # the UoW. What the UoW cannot roll back is the ad server itself: the
+                        # adapter call above has already reached it when a later branch
+                        # refuses.
                         uow.media_buys.update_package_fields(
                             req.media_buy_id,
                             pkg_update.package_id,
@@ -1725,15 +1753,12 @@ def _update_media_buy_impl(
                     if pkg_update.catalogs is not None:
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
-                        catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
                         # Through the repository's own writer rather than a mutate +
-                        # flag_modified pair: it replaces the document, bumps the buy's
+                        # flag_modified pair: it replaces the catalogs key, bumps the buy's
                         # revision (the buyer's optimistic-concurrency token, which an
                         # applied update owes them) and flushes, in one call.
-                        uow.media_buys.update_package_config(
-                            req.media_buy_id,
-                            pkg_update.package_id,
-                            {**(catalog_pkg.package_config or {}), "catalogs": pkg_update.catalogs},
+                        uow.media_buys.set_package_config_keys(
+                            req.media_buy_id, pkg_update.package_id, catalogs=pkg_update.catalogs
                         )
                         _package_changes(changes_by_package, pkg_update.package_id)
 
@@ -1757,6 +1782,7 @@ def _update_media_buy_impl(
                     package_id=None,
                     budget=None,
                     today=utc_flight_start(today),
+                    packages=_stored_packages(uow, req.media_buy_id),
                 )
                 # A package the adapter paused with the buy goes through the one assembly
                 # point below like any other modified package, so it is reported as a full

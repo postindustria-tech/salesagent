@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -38,6 +38,7 @@ from src.core.schemas import (
     PushNotificationConfig,
     ReportingPeriod,
 )
+from src.core.stored_package import StoredPackage
 from src.core.traffic_carrier import AdapterCreativeAsset, CreativesByPackage
 from src.core.validation_helpers import package_field_path
 
@@ -673,8 +674,16 @@ class AdServerAdapter(ABC):
         package_id: str | None,
         budget: int | None,
         today: datetime,
+        *,
+        packages: Sequence[StoredPackage],
     ) -> AdapterUpdateResult:
         """Updates a media buy with a specific action.
+
+        *packages* is every package of the buy as the seller stores it, read by the caller
+        inside its unit of work: an adapter reads what it needs from them and opens no
+        session. The caller writes the seller's own record of the change (the package's
+        ``budget`` and ``paused``) once the ad server accepts; an adapter changes only the
+        ad server.
 
         Failures are raised as AdCPSalesAgentError subclasses, never returned.
         """
