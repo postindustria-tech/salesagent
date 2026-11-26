@@ -15,7 +15,8 @@ reports for the buyer's advertiser (``DeliveryPollEnv.report_through_gam``); the
 send the request and read the buyer's wire response.
 
 local-gam-buy-readback.feature: the Givens build the seller's products and the buyer's packages,
-and state GAM's report per line item the stand-in network created (``serve_gam_report_rows``).
+and state GAM's report per line item the stand-in network created (``serve_gam_report_rows``,
+and ``add_gam_report_rows`` for a row of the advertiser's other order).
 The Then compares the delivery report with the ids create_media_buy returned.
 
 local-gam-line-item-goal.feature: the Givens build the seller's products and the buyer's
@@ -42,6 +43,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_entry_errors,
     wire_field,
 )
+from tests.bdd.steps.domain.uc004_delivery import _assert_wire_delivery_totals, _seeded_media_buy
 from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, when_sync_creative_with_assignments
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._creative_seeding import store_creative, store_package_creative
@@ -275,6 +277,32 @@ def given_gam_reports_line_items(
     ctx["env"].serve_gam_report_rows(rows)
 
 
+@given(
+    parsers.parse(
+        "Google Ad Manager's report also holds {impressions:d} impressions and {spend:g} spend for a line item "
+        "of the same advertiser's other order"
+    )
+)
+def given_gam_reports_other_order(ctx: dict, impressions: int, spend: float) -> None:
+    """GAM's report also holds a row for a line item of another order of the buy's advertiser.
+
+    The order and line item are ones this seller's buy does not hold: the report is the
+    advertiser's, and an advertiser runs more than one order.
+    """
+    advertiser_id = str(_orders_created(ctx)[0]["advertiserId"])
+    ctx["env"].add_gam_report_rows(
+        [
+            gam_delivery_row(
+                advertiser_id=advertiser_id,
+                order_id="5999001",
+                line_item_id="6999001",
+                impressions=impressions,
+                spend=spend,
+            )
+        ]
+    )
+
+
 @when("the Buyer Agent requests delivery for the media buy it just created")
 def when_request_delivery_for_created_buy(ctx: dict) -> None:
     """Capture the buy and packages create_media_buy returned, and request that buy's delivery.
@@ -311,6 +339,16 @@ def then_delivery_covers_created_buy_packages(ctx: dict, datatable: Any) -> None
         table_rows(datatable),
         package_of=lambda product_id: ctx["created_package_ids"][product_id],
     )
+
+
+@then(
+    parsers.parse(
+        "the media buy it just created is reported with totals of {impressions:d} impressions and {spend:g} spend"
+    )
+)
+def then_created_buy_totals(ctx: dict, impressions: int, spend: float) -> None:
+    """The created buy's ``totals`` on the wire are exactly these figures."""
+    _assert_wire_delivery_totals(ctx, ctx["created_media_buy_id"], impressions=impressions, spend=spend)
 
 
 @given(
@@ -361,6 +399,14 @@ def given_another_buyer_holds_creative(ctx: dict, creative_id: str, url: str) ->
         fmt=LIBRARY_IMAGE_FORMAT,
         principal=PrincipalFactory(tenant=ctx["tenant"]),
     )
+
+
+@given(parsers.parse('the media buy "{mb_id}" is booked in Google Ad Manager as the line item that report names'))
+def given_buy_booked_as_reported_line_item(ctx: dict, mb_id: str) -> None:
+    """The buy's one package holds the line item GAM's report row names."""
+    packages = _seeded_media_buy(ctx, mb_id).packages
+    assert len(packages) == 1, f"media buy {mb_id!r} must hold exactly one package; it holds {len(packages)}"
+    ctx["env"].book_as_reported_line_item(packages[0])
 
 
 @given(

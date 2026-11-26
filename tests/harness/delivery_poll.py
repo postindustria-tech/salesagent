@@ -138,6 +138,10 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryDispatchMixin, DeliveryPollMixin, 
 
     RESPONSE_MODEL = GetMediaBuyDeliveryResponse
 
+    #: The line item ``report_through_gam``'s row names. A buy is reported with that row's
+    #: figures when one of its packages is booked as this line item.
+    GAM_REPORTED_LINE_ITEM_ID = "6000001"
+
     # FIXME(#2012): JUSTIFIED OVERRIDE — deliberately does NOT declare
     # MCP_TOOL/A2A_SKILL, so it does not take the base's client-core delegation.
     # See DeliveryDispatchMixin; delete both overrides and their
@@ -178,8 +182,9 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryDispatchMixin, DeliveryPollMixin, 
         """Make the tenant a GAM seller whose network reports for the buyer's *advertiser_id*.
 
         GAM's report job ends in *job_status*. When *impressions* and *spend* are given, the
-        finished report holds one row with them (``gam_delivery_row``). Without them the report
-        has no rows: GAM has reported nothing yet.
+        finished report holds one row with them (``gam_delivery_row``), for the line item
+        ``GAM_REPORTED_LINE_ITEM_ID``. Without them the report has no rows: GAM has reported
+        nothing yet.
         """
         self.sell_through_gam(advertiser_id=advertiser_id, products=())
         rows = []
@@ -188,12 +193,24 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryDispatchMixin, DeliveryPollMixin, 
                 gam_delivery_row(
                     advertiser_id=advertiser_id,
                     order_id="5000001",
-                    line_item_id="6000001",
+                    line_item_id=self.GAM_REPORTED_LINE_ITEM_ID,
                     impressions=impressions,
                     spend=spend,
                 )
             )
         self.serve_gam_report_rows(rows, job_status=job_status)
+
+    def book_as_reported_line_item(self, package: Any) -> None:
+        """The seeded *package* is booked as the line item ``report_through_gam``'s row names.
+
+        create_media_buy stores the line item GAM created on the package
+        (``package_config["platform_line_item_id"]``); a seeded package states it here.
+        """
+        package.package_config = {
+            **package.package_config,
+            "platform_line_item_id": self.GAM_REPORTED_LINE_ITEM_ID,
+        }
+        self._commit_factory_data()
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""

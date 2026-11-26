@@ -61,6 +61,45 @@ class ReportingData:
     metrics: dict[str, Any]
 
 
+def calculate_metrics(data: list[dict[str, Any]]) -> dict[str, Any]:
+    """Calculate summary metrics from the processed data"""
+    if not data:
+        return {
+            "total_impressions": 0,
+            "total_clicks": 0,
+            "total_spend": 0.0,
+            "average_ctr": 0.0,
+            "average_ecpm": 0.0,
+            "unique_advertisers": 0,
+            "unique_orders": 0,
+            "unique_line_items": 0,
+        }
+
+    total_impressions = sum(row["impressions"] for row in data)
+    total_clicks = sum(row["clicks"] for row in data)
+    total_spend = sum(row["spend"] for row in data)
+
+    # Calculate averages
+    avg_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0.0
+    avg_ecpm = (total_spend / total_impressions * 1000) if total_impressions > 0 else 0.0
+
+    # Count unique entities
+    unique_advertisers = len({row["advertiser_id"] for row in data if row["advertiser_id"]})
+    unique_orders = len({row["order_id"] for row in data if row["order_id"]})
+    unique_line_items = len({row["line_item_id"] for row in data if row["line_item_id"]})
+
+    return {
+        "total_impressions": total_impressions,
+        "total_clicks": total_clicks,
+        "total_spend": round(total_spend, 2),
+        "average_ctr": round(avg_ctr, 4),
+        "average_ecpm": round(avg_ecpm, 2),
+        "unique_advertisers": unique_advertisers,
+        "unique_orders": unique_orders,
+        "unique_line_items": unique_line_items,
+    }
+
+
 class GAMReportingService:
     """Service for getting comprehensive reporting data from Google Ad Manager"""
 
@@ -128,7 +167,7 @@ class GAMReportingService:
         processed_data = self._process_report_data(report_data, granularity, requested_timezone)
 
         # Calculate summary metrics
-        metrics = self._calculate_metrics(processed_data)
+        metrics = calculate_metrics(processed_data)
 
         return ReportingData(
             data=processed_data,
@@ -630,44 +669,6 @@ class GAMReportingService:
 
         return data_valid_until
 
-    def _calculate_metrics(self, data: list[dict[str, Any]]) -> dict[str, Any]:
-        """Calculate summary metrics from the processed data"""
-        if not data:
-            return {
-                "total_impressions": 0,
-                "total_clicks": 0,
-                "total_spend": 0.0,
-                "average_ctr": 0.0,
-                "average_ecpm": 0.0,
-                "unique_advertisers": 0,
-                "unique_orders": 0,
-                "unique_line_items": 0,
-            }
-
-        total_impressions = sum(row["impressions"] for row in data)
-        total_clicks = sum(row["clicks"] for row in data)
-        total_spend = sum(row["spend"] for row in data)
-
-        # Calculate averages
-        avg_ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0.0
-        avg_ecpm = (total_spend / total_impressions * 1000) if total_impressions > 0 else 0.0
-
-        # Count unique entities
-        unique_advertisers = len({row["advertiser_id"] for row in data if row["advertiser_id"]})
-        unique_orders = len({row["order_id"] for row in data if row["order_id"]})
-        unique_line_items = len({row["line_item_id"] for row in data if row["line_item_id"]})
-
-        return {
-            "total_impressions": total_impressions,
-            "total_clicks": total_clicks,
-            "total_spend": round(total_spend, 2),
-            "average_ctr": round(avg_ctr, 4),
-            "average_ecpm": round(avg_ecpm, 2),
-            "unique_advertisers": unique_advertisers,
-            "unique_orders": unique_orders,
-            "unique_line_items": unique_line_items,
-        }
-
     def get_country_breakdown(
         self,
         date_range: Literal["lifetime", "this_month", "today"],
@@ -760,7 +761,7 @@ class GAMReportingService:
 
         # Calculate data validity and metrics
         data_valid_until = self._calculate_data_validity(date_range)
-        metrics = self._calculate_metrics(processed_data)
+        metrics = calculate_metrics(processed_data)
 
         return {
             "date_range": date_range,
@@ -908,7 +909,7 @@ class GAMReportingService:
 
         # Calculate data validity and metrics
         data_valid_until = self._calculate_data_validity(date_range)
-        metrics = self._calculate_metrics(filtered_data)
+        metrics = calculate_metrics(filtered_data)
 
         return {
             "date_range": date_range,

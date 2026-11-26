@@ -277,9 +277,15 @@ class GamSellerMixin:
         Rows are keyed by GAM's own column names (``Dimension.*``, ``Column.*``), as
         ``serve_gam_report`` writes them.
         """
+        self._gam_report_rows = list(rows)
+        self._gam_report_job_status = job_status
         self.mock["gam_report_download"].return_value = serve_gam_report(
-            self.mock["gam_client"].return_value, rows=list(rows), job_status=job_status
+            self.mock["gam_client"].return_value, rows=self._gam_report_rows, job_status=job_status
         )
+
+    def add_gam_report_rows(self, rows: Iterable[Mapping[str, object]]) -> None:
+        """GAM's report also holds *rows*, after the rows a Given already stated; its job ends as stated."""
+        self.serve_gam_report_rows([*self._gam_report_rows, *rows], job_status=self._gam_report_job_status)
 
     @realize_e2e(_live_server_builds_its_own_adapter)
     def sell_through_tenant_adapter(self) -> None:

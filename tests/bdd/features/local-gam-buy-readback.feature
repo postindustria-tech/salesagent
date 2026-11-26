@@ -63,3 +63,13 @@ Feature: get_media_buy_delivery reports each package of a Google Ad Manager buy 
       | package     | impressions | spend | pricing_model | rate  | currency |
       | leaderboard | 1000        | 10.00 | cpm           | 10.00 | USD      |
       | rectangle   | 0           | 0.00  | cpm           | 12.00 | USD      |
+
+  # GAM's delivery report is requested for the buyer's advertiser, so it also holds the line
+  # items of that advertiser's other orders. `media_buy_deliveries[].totals` is that media
+  # buy's delivery: the sum of its own packages, whatever else the advertiser runs.
+  @T-UC-004-local-gam-readback-totals-own-line-items @extension
+  Scenario: The buy's totals count its own line items, not the advertiser's other orders
+    Given Google Ad Manager reports 1000 impressions and 10.00 spend for the "leaderboard" package's line item, and 3000 impressions and 36.00 spend for the "rectangle" package's line item
+    And Google Ad Manager's report also holds 27 impressions and 0.14 spend for a line item of the same advertiser's other order
+    When the Buyer Agent requests delivery for the media buy it just created
+    Then the media buy it just created is reported with totals of 4000 impressions and 46 spend
