@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from typing import cast as type_cast
 
+from pydantic import BaseModel
 from sqlalchemy import ColumnElement, Select, SQLColumnExpression, case, func, literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -93,8 +94,6 @@ def build_workflow_step(
     issue: #2002
     """
     # Serialize Pydantic models at the DB boundary.
-    from pydantic import BaseModel
-
     if isinstance(request_data, BaseModel):
         request_data = request_data.model_dump(mode="json")
     if request_metadata and request_data is not None:
@@ -214,6 +213,11 @@ class StepOrder:
 
 
 _NEWEST_FIRST = StepOrder()
+
+#: The statuses a step ends in. Every other stored status is an open step, and that
+#: includes ``approved``: the admin's approve routes write it BEFORE the approval writer
+#: runs, so the writer finds the step in that status and must still be able to close it.
+_ENDED_STEP_STATUSES = ("completed", "failed", "rejected")
 
 
 class WorkflowRepository(Repository):
@@ -605,6 +609,48 @@ class WorkflowRepository(Repository):
     # ------------------------------------------------------------------
     # WorkflowStep writes
     # ------------------------------------------------------------------
+
+    def close_open_step_for_object(
+        self,
+        *,
+        object_type: str,
+        object_id: str,
+        tool_name: str,
+        status: Literal["completed", "failed"],
+        result: BaseModel | None = None,
+        error_message: str | None = None,
+    ) -> WorkflowStep | None:
+        """End the open *tool_name* step linked to an object as *status*.
+
+        This is the buyer's task for the operation that opened the step. Once the seller
+        has done its part the task is ``completed`` and *result* is its terminal payload;
+        when the seller's part fails it is ``failed`` with *error_message*. A step that
+        already ended (``_ENDED_STEP_STATUSES``) is left as it is. Returns the step, or
+        None when the object has no open step of that tool.
+        Does NOT commit — the caller handles that.
+        """
+        step = self._session.scalars(
+            self._filtered_steps(
+                statuses=None,
+                tool_names=[tool_name],
+                step_ids=None,
+                object_type=object_type,
+                object_id=object_id,
+                principal_id=None,
+            )
+            .where(WorkflowStep.status.notin_(_ENDED_STEP_STATUSES))
+            .order_by(WorkflowStep.created_at.desc())
+        ).first()
+        if step is None:
+            return None
+        return self.update_status(
+            step.step_id,
+            status=status,
+            completed_at=datetime.now(UTC),
+            # The persistence edge: the model becomes the stored document here.
+            response_data=result.model_dump(mode="json") if result is not None else None,
+            error_message=error_message,
+        )
 
     def update_status(
         self,

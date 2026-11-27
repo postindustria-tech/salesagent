@@ -450,6 +450,12 @@ class MediaBuyCreateEnv(
             [PersistedMediaBuyStatus.PENDING_APPROVAL]
         )
 
+    def media_buy_ids(self) -> list[str]:
+        """The ids of every media buy of this env's tenant, whatever its status."""
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        return [buy.media_buy_id for buy in MediaBuyRepository(self.get_session(), self._tenant_id).list_all()]
+
     def move_pending_flight_back(self, days: int) -> None:
         """Move the flight of the one media buy awaiting approval *days* into the past."""
         (media_buy,) = self.media_buys_awaiting_approval()

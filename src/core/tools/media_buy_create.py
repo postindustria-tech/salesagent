@@ -149,7 +149,7 @@ from src.core.schemas import (
     Product,
     Targeting,
 )
-from src.core.tools._media_buy_status import seller_valid_actions
+from src.core.tools._media_buy_status import resolve_canonical_status, seller_valid_actions
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.creatives._assignments import assignments_by_package
 from src.core.tools.financial_validation import (
@@ -870,6 +870,18 @@ def _mark_approval_failed(
                 uow = stack.enter_context(_MediaBuyUoW(tenant_id))
             assert uow.media_buys is not None
             uow.media_buys.update_status(media_buy_id, PersistedMediaBuyStatus.FAILED)
+            # The buyer's create_media_buy task fails with the buy, in the same write
+            # (AdCP enums/task-status.json: ``failed`` is "Task failed due to an error
+            # during execution"). Left open, the task would read ``unknown`` for good.
+            assert uow.workflows is not None
+            uow.workflows.close_open_step_for_object(
+                object_type="media_buy",
+                object_id=media_buy_id,
+                tool_name="create_media_buy",
+                status="failed",
+                # The buyer-facing sentence of the typed error, as get_task_status reads it.
+                error_message=error.message,
+            )
     except SQLAlchemyError:
         # Narrow deliberately. A broad except here swallowed a NameError once and
         # reported it as an ad-server failure, which is a lie the caller cannot see
@@ -910,6 +922,10 @@ def execute_approved_media_buy(
 
     This ensures the same adapter logic runs for both auto-approved and
     manually approved media buys.
+
+    When the adapter has created the order, the buyer's create_media_buy task is
+    completed with the media buy as its result, in the same write as the buy's status.
+    When the adapter fails, the task fails with the buy (``_mark_approval_failed``).
 
     Args:
         media_buy_id: The media buy ID to execute
@@ -1534,6 +1550,28 @@ def execute_approved_media_buy(
             )
             assert written is not None, f"media buy {media_buy_id!r} vanished mid-write"
             logger.info(log_safe(f"[APPROVAL] Media buy {media_buy_id} -> {resolved}"))
+            # The buyer's create_media_buy task ends here, in the same write: the seller
+            # approved and the ad server holds the order. AdCP enums/task-status.json:
+            # ``completed`` is "Task has been successfully completed", and
+            # get-task-status-response.json gives a completed task its terminal ``result``.
+            # The status a buyer reads for the buy: the stored one, refined by the flight.
+            buyer_status = resolve_canonical_status(written, datetime.now(UTC).date())
+            assert uow3.workflows is not None
+            uow3.workflows.close_open_step_for_object(
+                object_type="media_buy",
+                object_id=media_buy_id,
+                tool_name="create_media_buy",
+                status="completed",
+                result=CreateMediaBuySuccess.sync_success(
+                    media_buy_id=media_buy_id,
+                    packages=[Package(package_id=row.package_id) for row in uow3.media_buys.get_packages(media_buy_id)],
+                    confirmed_at=written.confirmed_at,
+                    revision=written.revision,
+                    media_buy_status=buyer_status,
+                    valid_actions=seller_valid_actions(buyer_status),
+                    creative_deadline=creative_deadline,
+                ),
+            )
             return ApprovalResult(
                 outcome=ApprovalOutcome.EXECUTED,
                 status=resolved,

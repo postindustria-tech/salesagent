@@ -256,10 +256,14 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
     # The tenant's adapter_config row, read on this unit's session so building the adapter
     # inside the unit opens no session of its own (``build_adapter``, #2647).
     adapter_configs: AdapterConfigRepository | None
+    # The approval writer completes the buyer's create_media_buy task in the same
+    # transaction as the buy's post-approval status.
+    workflows: WorkflowRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.workflows = WorkflowRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
         self.publishers = PublisherRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
@@ -277,6 +281,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         self.currency_limits = None
         self.idempotency_attempts = None
         self.adapter_configs = None
+        self.workflows = None
 
 
 class ProductUoW(_OffersProducts, BaseUoW):

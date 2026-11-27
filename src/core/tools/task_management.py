@@ -111,6 +111,11 @@ _WORKFLOW_STATUS_TO_SPEC_STATUS: dict[str, str] = {
     "pending": "submitted",
     "in_progress": "working",
     "requires_approval": "input-required",
+    # The admin's approve routes write ``approved`` before the ad server holds the order.
+    # The seller's input is given and the buy is queued for booking, which may wait on
+    # creative review: enums/task-status.json ``submitted`` is "Task accepted and queued
+    # for long-running execution (hours to days)". The approval writer ends the task.
+    "approved": "submitted",
     "completed": "completed",
     "failed": "failed",
     "rejected": "rejected",
@@ -159,8 +164,8 @@ def _spec_task_type(step: Any) -> str:
     tool_name. Adapter and approval steps (activate_gam_order, creative_approval, ...) have
     no member of enums/task-type.json, which is real: the pin's task IS the buyer's
     operation, and those steps are our implementation of one rather than tasks in their own
-    right. The narrowing that would remove the whole residue -- exposing only steps that
-    service a buyer operation -- is filed as its own bead and deliberately not folded in.
+    right. list_tasks reads only the steps that service a buyer operation, so this is reached
+    by get_task_status alone, for a step id a buyer was never given.
     """
     tool_name = getattr(step, "tool_name", None)
     task_type = _TASK_TYPE_BY_TOOL.get(tool_name or "")
@@ -240,14 +245,19 @@ async def _list_tasks_impl(
     # with everything. task_type and protocol both narrow tool_name, so naming both keeps
     # the tools that satisfy each.
     statuses: list[str] | None = None
-    tool_names: list[str] | None = None
+    # A task is the buyer's OPERATION (list-tasks-response.json, tasks[].task_type: "Type
+    # of AdCP operation"), so the listing reads only the steps that service one. A seller's
+    # own steps under the same principal (the GAM adapter's activate_gam_order) have no
+    # member of enums/task-type.json and are not tasks a buyer lists.
+    tool_names: list[str] | None = list(_TASK_TYPE_BY_TOOL)
     step_ids: list[str] | None = None
     if req.filters is not None:
         filters = req.filters
         statuses = _stored_matching(_WORKFLOW_STATUS_TO_SPEC_STATUS, _requested(filters.status, filters.statuses))
         by_type = _stored_matching(_TASK_TYPE_BY_TOOL, _requested(filters.task_type, filters.task_types))
         by_protocol = _stored_matching(_DOMAIN_BY_TOOL, _requested(filters.protocol, filters.protocols))
-        tool_names = by_type if by_protocol is None else [t for t in by_protocol if by_type is None or t in by_type]
+        if by_type is not None or by_protocol is not None:
+            tool_names = by_type if by_protocol is None else [t for t in by_protocol if by_type is None or t in by_type]
         step_ids = filters.task_ids
     # created_after/created_before/updated_after/updated_before, context_contains and
     # has_webhook are not applied yet: a buyer naming one gets the listing unnarrowed by it.

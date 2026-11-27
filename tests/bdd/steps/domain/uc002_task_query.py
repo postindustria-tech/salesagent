@@ -11,7 +11,7 @@ dispatches through the transport-generic client, which takes the tool by name: t
 sit on the UC-002 catch-all row, whose env's own verb is create_media_buy. The request goes
 as a RAW payload because the refusal rows send values the pinned model cannot hold.
 
-The Given seeds six tasks of the caller's own, through the factories, with distinct
+The Given seeds seven tasks of the caller's own, through the factories, with distinct
 statuses, three task types and creation and completion times arranged so that every sort
 field orders them differently. Each seeded task states, as literals, the task_type, status
 and protocol the pin says a buyer reads for it; the Thens compare the wire against those, so
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pytest_bdd import given, parsers, when
+from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
@@ -54,7 +54,7 @@ class _SeededTask:
 
 
 def _seed_table(now: datetime) -> list[_SeededTask]:
-    """The six tasks. Every status a stored step can carry, three task types, all media-buy.
+    """The seven tasks. Every status a stored step can carry, three task types, all media-buy.
 
     By creation the newest is the rejected one; by update it is the completed one; by
     status the first is ``completed``. So a sort that ignores ``sort.field`` puts the wrong
@@ -68,6 +68,8 @@ def _seed_table(now: datetime) -> list[_SeededTask]:
 
     return [
         _SeededTask("create_media_buy", "pending", ago(600), None, "create_media_buy", "submitted", "media-buy"),
+        # The admin approved it; the ad server does not hold the order yet.
+        _SeededTask("create_media_buy", "approved", ago(550), None, "create_media_buy", "submitted", "media-buy"),
         _SeededTask("update_media_buy", "in_progress", ago(500), None, "update_media_buy", "working", "media-buy"),
         _SeededTask(
             "sync_creatives", "requires_approval", ago(400), None, "sync_creatives", "input-required", "media-buy"
@@ -86,7 +88,7 @@ def _seed_table(now: datetime) -> list[_SeededTask]:
 
 @given("the Buyer Agent owns tasks of several types, statuses and update times")
 def given_seeded_tasks(ctx: dict) -> None:
-    """Seed the six tasks under the caller's own principal, keyed by their step id.
+    """Seed the seven tasks under the caller's own principal, keyed by their step id.
 
     Through the env-bound factories, so on e2e_rest the rows land in the live server's
     database. One context owns them all: list_tasks scopes by the context's principal.
@@ -149,6 +151,64 @@ def given_task_sort(ctx: dict, member: str, value: str) -> None:
 def when_query_task_list(ctx: dict) -> None:
     """Send list_tasks with the query the Givens built, on the scenario's transport."""
     dispatch_via_client(ctx, "list_tasks", dict(ctx.get("task_query", {})))
+
+
+def _task_the_create_returned(ctx: dict) -> str:
+    """Remember the ``task_id`` of the submitted create_media_buy, read off its wire response."""
+    ctx["created_task_id"] = wire_field(ctx, "task_id")
+    return ctx["created_task_id"]
+
+
+@when("the Buyer Agent asks for the status of the task the create returned, with its result")
+def when_get_created_task_status(ctx: dict) -> None:
+    """Send get_task_status for the task the last create_media_buy response named."""
+    dispatch_via_client(ctx, "get_task_status", {"task_id": _task_the_create_returned(ctx), "include_result": True})
+
+
+@when("the Buyer Agent lists its tasks, remembering the task the create returned")
+def when_list_tasks_after_create(ctx: dict) -> None:
+    """Send list_tasks with no filter, after noting the task the last create response named."""
+    _task_the_create_returned(ctx)
+    dispatch_via_client(ctx, "list_tasks", {})
+
+
+@then(parsers.parse('the task reads "{status}" for the "{task_type}" operation'))
+def then_task_reads(ctx: dict, status: str, task_type: str) -> None:
+    """The get_task_status response is the created task, in *status*, of *task_type*."""
+    actual = {name: wire_field(ctx, name) for name in ("task_id", "status", "task_type")}
+    expected = {"task_id": ctx["created_task_id"], "status": status, "task_type": task_type}
+    assert actual == expected, f"the task reads {actual} on the wire, expected {expected}"
+
+
+@then(parsers.parse("the task's result is the approved media buy, not yet started, with {count:d} packages"))
+def then_task_result_is_media_buy(ctx: dict, count: int) -> None:
+    """``result`` names the tenant's one media buy, as ``pending_start``, with one entry per package."""
+    (media_buy_id,) = ctx["env"].media_buy_ids()
+    result = wire_field(ctx, "result")
+    assert result.get("media_buy_id") == media_buy_id, (
+        f"the task's result names media buy {result.get('media_buy_id')!r}, expected {media_buy_id!r}"
+    )
+    assert result.get("media_buy_status") == "pending_start", (
+        f"the task's result reads media_buy_status {result.get('media_buy_status')!r} for a buy whose flight "
+        "has not started, expected 'pending_start'"
+    )
+    packages = result.get("packages") or []
+    assert len(packages) == count, f"the task's result carries {len(packages)} packages, expected {count}: {packages}"
+
+
+@then(
+    parsers.parse(
+        'the task list holds only the task the create returned, as "{status}" for the "{task_type}" operation'
+    )
+)
+def then_task_list_holds_only_created(ctx: dict, status: str, task_type: str) -> None:
+    """The list_tasks response is exactly the created task, and its summary counts one."""
+    listed = [(task["task_id"], task.get("status"), task.get("task_type")) for task in wire_field(ctx, "tasks")]
+    assert listed == [(ctx["created_task_id"], status, task_type)], (
+        f"the task list reads {listed}, expected only {(ctx['created_task_id'], status, task_type)}"
+    )
+    total = wire_field(ctx, "query_summary.total_matching")
+    assert total == 1, f"query_summary.total_matching is {total}, expected 1"
 
 
 # ═══════════════════════════════════════════════════════════════════════
