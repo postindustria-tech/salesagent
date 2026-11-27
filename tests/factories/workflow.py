@@ -1,4 +1,4 @@
-"""Factories for the async-task tables: a principal's Context and its WorkflowSteps.
+"""Factories for the async-task tables: a principal's Context, its WorkflowSteps and their object links.
 
 Ids come from uuid4 rather than a ``Sequence``: both tables are keyed globally, not per
 tenant, and on e2e_rest every xdist worker writes into the one live-stack database, where
@@ -13,7 +13,7 @@ from uuid import uuid4
 import factory
 from factory import LazyAttribute, LazyFunction, SubFactory
 
-from src.core.database.models import Context, WorkflowStep
+from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from tests.factories.principal import PrincipalFactory
 
 
@@ -60,3 +60,20 @@ class WorkflowStepFactory(factory.alchemy.SQLAlchemyModelFactory):
     created_at = LazyFunction(lambda: datetime.now(UTC))
     completed_at = None
     comments = LazyFunction(list)
+
+
+class ObjectWorkflowMappingFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """The link from a workflow step to the object it acts on, such as a media buy."""
+
+    class Meta:
+        model = ObjectWorkflowMapping
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+        exclude = ("step",)
+
+    step = SubFactory(WorkflowStepFactory)
+
+    step_id = LazyAttribute(lambda o: o.step.step_id)
+    object_type = "media_buy"
+    object_id = LazyFunction(lambda: f"mb_{uuid4().hex[:12]}")
+    action = "create"

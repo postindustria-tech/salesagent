@@ -145,7 +145,9 @@ class TestListTasksTool:
         assert result.tasks is not None
         mock_workflow_repo.count_by_tenant.assert_called_once_with(
             statuses=["requires_approval"],
-            tool_names=None,
+            # Without a task_type or protocol filter the listing reads the buyer's
+            # operations only, never a seller's own steps.
+            tool_names=["create_media_buy", "update_media_buy", "sync_creatives"],
             step_ids=None,
             object_type=None,
             object_id=None,

@@ -250,10 +250,14 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
     assignments: CreativeAssignmentRepository | None
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
+    # The approval writer completes the buyer's create_media_buy task in the same
+    # transaction as the buy's post-approval status.
+    workflows: WorkflowRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.workflows = WorkflowRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
         self.publishers = PublisherRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
@@ -269,6 +273,7 @@ class MediaBuyUoW(_OffersProducts, BaseUoW):
         self.assignments = None
         self.currency_limits = None
         self.idempotency_attempts = None
+        self.workflows = None
 
 
 class ProductUoW(_OffersProducts, BaseUoW):
