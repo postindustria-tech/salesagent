@@ -32,6 +32,7 @@ Feature: get_media_buy_delivery reports a Google Ad Manager buy while GAM has no
   Scenario: A buy GAM is still reporting is returned with the figures GAM has so far
     Given the seller reports delivery from Google Ad Manager, which has reported 1200 impressions and 4.80 spend so far for the buyer's advertiser "3000001"
     And a media buy "mb-001" owned by "buyer-001" with status "active"
+    And the media buy "mb-001" is booked in Google Ad Manager as the line item that report names
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should include "mb-001" with 1200 impressions and 4.8 spend

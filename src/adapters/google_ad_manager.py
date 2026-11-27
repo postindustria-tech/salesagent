@@ -947,7 +947,7 @@ class GoogleAdManager(AdServerAdapter):
         Returns:
             AdapterGetMediaBuyDeliveryResponse with real metrics from GAM
         """
-        from src.adapters.gam_reporting_service import GAMReportingService
+        from src.adapters.gam_reporting_service import GAMReportingService, calculate_metrics
         from src.core.database.database_session import get_db_session
         from src.core.database.repositories.media_buy import MediaBuyRepository
         from src.core.schemas import AdapterPackageDelivery, DeliveryTotals
@@ -1025,8 +1025,8 @@ class GoogleAdManager(AdServerAdapter):
         else:
             range_type = "lifetime"
 
-        # Fetch delivery data from GAM
-        # Note: We'll aggregate across all line items associated with this media buy
+        # Fetch delivery data from GAM. The report covers the advertiser; the rows are
+        # filtered to this buy below.
         reporting_data = reporting_service.get_reporting_data(
             date_range=cast("Literal['lifetime', 'this_month', 'today']", range_type),
             advertiser_id=self.advertiser_id,
@@ -1037,16 +1037,29 @@ class GoogleAdManager(AdServerAdapter):
         # partial metrics"). When GAM has not finished the period, say when to expect it complete.
         _, expected_availability = GAMDataFreshnessValidator.should_retry_later(reporting_data, date_range.end)
 
-        # Aggregate totals across all packages
-        total_impressions = reporting_data.metrics.get("total_impressions", 0)
-        total_clicks = reporting_data.metrics.get("total_clicks", 0)
-        total_spend = reporting_data.metrics.get("total_spend", 0.0)
-        avg_ctr = reporting_data.metrics.get("average_ctr", 0.0)
+        # GAM's report is the advertiser's, so it also holds the line items of the advertiser's
+        # other orders. This buy's delivery is the rows of its own line items.
+        rows_of_buy = [row for row in reporting_data.data if str(row.get("line_item_id") or "") in package_by_line_item]
+        if reporting_data.data and not package_by_line_item:
+            logger.warning(
+                "Media buy %s has no package booked as a GAM line item, so none of the %d report rows "
+                "of advertiser %s is its delivery; it is reported at zero",
+                media_buy_id,
+                len(reporting_data.data),
+                self.advertiser_id,
+            )
+
+        # Totals of this buy's own rows
+        metrics_of_buy = calculate_metrics(rows_of_buy)
+        total_impressions = metrics_of_buy["total_impressions"]
+        total_clicks = metrics_of_buy["total_clicks"]
+        total_spend = metrics_of_buy["total_spend"]
+        avg_ctr = metrics_of_buy["average_ctr"]
 
         # Build daily breakdown from reporting data
         daily_breakdown = []
         daily_metrics = {}
-        for row in reporting_data.data:
+        for row in rows_of_buy:
             # Extract date from the row (reporting service uses DATE dimension)
             date_str = row.get("date", row.get("DATE", ""))
             if date_str:
@@ -1083,12 +1096,10 @@ class GoogleAdManager(AdServerAdapter):
         # A package's delivery is its line item's. GAM's report covers every line item of
         # the buy, so a line item with no rows has delivered nothing, and is reported at zero.
         line_item_metrics: dict[str, dict[str, Any]] = {}
-        for row in reporting_data.data:
-            line_item_id = str(row.get("line_item_id") or "")
-            if line_item_id:
-                metrics = line_item_metrics.setdefault(line_item_id, {"impressions": 0, "spend": 0.0})
-                metrics["impressions"] += row.get("impressions", 0)
-                metrics["spend"] += row.get("spend", 0.0)
+        for row in rows_of_buy:
+            metrics = line_item_metrics.setdefault(str(row["line_item_id"]), {"impressions": 0, "spend": 0.0})
+            metrics["impressions"] += row.get("impressions", 0)
+            metrics["spend"] += row.get("spend", 0.0)
         zero = {"impressions": 0, "spend": 0.0}
         by_package = [
             AdapterPackageDelivery(
